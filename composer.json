@@ -13,7 +13,8 @@
     },
     "require": {
     	"tribe/core": "^4.0",
-    	"tribe/auth": "^3.0"
+    	"tribe/auth": "^3.0",
+        "alsvanzelf/jsonapi": "2.4"
     },
     "autoload": {
         "psr-4": {
