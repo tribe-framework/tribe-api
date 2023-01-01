@@ -9,7 +9,7 @@ class API {
 
     private $response;
     private $request;
-    private $requestBody;
+    public $requestBody;
 
     public function __construct()
     {
