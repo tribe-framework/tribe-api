@@ -1,20 +1,11 @@
 {
     "name": "tribe/api",
     "description": "JSON API for Tribe (v3)",
-    "repositories": {
-        "tribe/core": {
-            "type": "git",
-            "url": "https://github.com/wil-ldf-ire/tribe-core.git"
-        },
-        "tribe/auth": {
-            "type": "git",
-            "url": "https://github.com/wil-ldf-ire/tribe-auth.git"
-        }
-    },
+    "license": "GPL-3.0-or-later",
     "require": {
     	"tribe/core": "^4.0",
     	"tribe/auth": "^3.0",
-        "alsvanzelf/jsonapi": "2.4"
+        "alsvanzelf/jsonapi": "^2.4"
     },
     "autoload": {
         "psr-4": {
