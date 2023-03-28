@@ -2,8 +2,8 @@
 namespace Tribe;
 
 use JetBrains\PhpStorm\NoReturn;
-use \Tribe\Dash as Dash;
-use \Tribe\MySQL as SQL;
+use alsvanzelf\jsonapi\CollectionDocument;
+use alsvanzelf\jsonapi\ResourceDocument;
 
 class API {
 
@@ -14,6 +14,179 @@ class API {
     public function __construct()
     {
         $this->requestBody = \json_decode(\file_get_contents('php://input'), 1) ?? [];
+
+        $this->config = new \Tribe\Config;
+        $this->core = new \Tribe\Core;
+        $this->auth = new \Tribe\Auth;
+
+        $this->url_parts = explode('/', parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
+        $this->type = (string) ($this->url_parts[2] ?? '');
+        $this->id = (int) ($this->url_parts[3] ?? 0);
+
+    }
+
+    public function jsonAPI($version = '1.1') {
+
+        if ($version == '1.1') {
+
+            if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
+                if ($this->id) {
+                    $this->core->deleteObject($this->id);
+                    $document = new ResourceDocument();
+                    $document->sendResponse();
+                }
+                else {
+                        $document = new ResourceDocument();
+                        $document->sendResponse();
+                }
+            }
+
+            else if ($_SERVER['REQUEST_METHOD'] === 'PATCH') {
+                $object = $this->requestBody;
+                $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
+                unset($object['attributes']);
+                
+                $object = $this->core->getObject($this->core->pushObject($object));
+
+                $document = new ResourceDocument($this->type, $object['id']);
+                $document->add('modules', $object);
+                $document->add('slug', $object['slug']);
+                $document->sendResponse();
+            }
+
+            else if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                $object = $this->requestBody;
+                $object = array_merge($object['data'], $object['data']['attributes']['modules']);
+                unset($object['attributes']);
+
+                if ($object['type'] == 'user')
+                    $object['user_id'] = $this->auth->getUniqueUserID();
+
+                $object = $this->core->getObject($this->core->pushObject($object));
+
+                $document = new ResourceDocument($this->type, $object['id']);
+                $document->add('modules', $object);
+                $document->add('slug', $object['slug']);
+                $document->sendResponse();
+            }
+
+            else {
+
+                if ($this->type == 'webapp') {
+                    $object = $this->config->getTypes();
+
+                    if ( ($_GET['include'] ?? false) && in_array('total_objects', $_GET['include']) ) {
+                        foreach ($object as $key => $value) {
+                            $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
+                        }
+                    }
+
+                    $document = new ResourceDocument($this->type, 0);
+                    $document->add('modules', $object);
+                    $document->add('slug', $object['slug']);
+                    $document->sendResponse();
+                }
+
+                else if (($this->type ?? false) && !($this->id ?? false)) {
+
+                    //PAGINATION
+                    $limit = "0, 25";
+                    if ($_GET['page']['limit'] != '-1') {
+                        if (!($_GET['page']['offset'] ?? false))
+                            $_GET['page']['offset'] = 0;
+                        if (!($_GET['page']['limit'] ?? false))
+                            $_GET['page']['limit'] = 25;
+
+                        if (($_GET['page']['limit'] ?? false) !== null && ($_GET['page']['offset'] ?? false) !== null)
+                            $limit = "{$_GET['page']['offset']}, {$_GET['page']['limit']}";
+                        else if (($_GET['page']['limit'] ?? false) !== null)
+                            $limit = $_GET['page']['limit'];
+                    } else {
+                        $limit = "";
+                    }
+
+                    //SORTING
+                    if ($_GET['sort'] ?? false) {
+                        $sort_arr = array_map('trim', explode(',', $_GET['sort']));
+                        $sort_field = $sort_order = array();
+
+                        foreach ($sort_arr as $val) {
+                            if (substr($val, 0, 1) == '-') {
+                                $sort_field[] = substr($val, 1, strlen($val));
+                                $sort_order[] = 'DESC';
+                            }
+                            else {
+                                $sort_field[] = $val;
+                                $sort_order[] = 'ASC';
+                            }
+                        }
+                    }
+                    else {
+                        $sort_field = 'id';
+                        $sort_order = 'DESC';
+                    }
+                    
+                    //getting IDs
+                    if ($this->ids = $this->core->getIDs(
+                            $search_array = array_merge(
+                                ($_GET['filter'] ?? []), 
+                                ($_GET['modules'] ?? []), 
+                                array('type'=>$this->type)
+                            ), 
+                            $limit,
+                            $sort_field, 
+                            $sort_order,
+                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
+                            $show_partial_search_results = ($_GET['filter'] ? boolval(true) : boolval(false))
+                        ))
+                    {
+                        $objectr = $this->core->getObjects($this->ids);
+                        $objects = [];
+                        
+                        //to sort accurately
+                        foreach ($this->ids as $this->idr) {
+                            $objects[] = $objectr[$this->idr['id']];
+                        }
+
+                        $i = 0;
+                        foreach ($objects as $object) {
+                            $documents[$i] = new ResourceDocument($this->type, $object['id']);
+                            $documents[$i]->add('modules', $object);
+                            $documents[$i]->add('slug', $object['slug']);
+                            $i++;
+                        }
+                        $document = CollectionDocument::fromResources(...$documents);
+                        $document->sendResponse();
+                    } 
+
+                    else {
+                        $documents[0] = new ResourceDocument($this->type, 0);
+                        $documents[0]->add('modules', []);
+                        $document = CollectionDocument::fromResources(...$documents);
+                        $document->sendResponse();
+                    }
+                }
+
+                else if (($this->type ?? false) && ($this->id ?? false)) {
+                    if ($object = $this->core->getObject($this->id)) {
+                        $document = new ResourceDocument($this->type, $object['id']);
+                        $document->add('modules', $object);
+                        $document->add('slug', $object['slug']);
+                        $document->sendResponse();
+                    } else {
+                        $document = new ResourceDocument($this->type, 0);
+                        $document->add('modules', []);
+                        $document->sendResponse();
+                    }
+                }
+
+                else {
+                        $document = new ResourceDocument();
+                        $document->sendResponse();
+                }
+            }
+        }
+
     }
 
     /**
