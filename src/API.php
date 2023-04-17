@@ -31,13 +31,18 @@ class API {
 
             if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
                 if ($this->id) {
-                    $this->core->deleteObject($this->id);
-                    $document = new ResourceDocument();
-                    $document->sendResponse();
-                }
-                else {
+                    if ($this->core->deleteObject($this->id)) {
                         $document = new ResourceDocument();
                         $document->sendResponse();
+                    }
+                    else {
+                        $this->send(404);
+                        die();
+                    }
+                }
+                else {
+                    $this->send(404);
+                    die();
                 }
             }
 
@@ -160,8 +165,7 @@ class API {
                     } 
 
                     else {
-                        $documents[0] = new ResourceDocument($this->type, 0);
-                        $documents[0]->add('modules', []);
+                        $documents = array();
                         $document = CollectionDocument::fromResources(...$documents);
                         $document->sendResponse();
                     }
@@ -174,15 +178,14 @@ class API {
                         $document->add('slug', $object['slug']);
                         $document->sendResponse();
                     } else {
-                        $document = new ResourceDocument($this->type, 0);
-                        $document->add('modules', []);
-                        $document->sendResponse();
+                        $this->send(404);
+                        die();
                     }
                 }
 
                 else {
-                        $document = new ResourceDocument();
-                        $document->sendResponse();
+                    $this->send(404);
+                    die();
                 }
             }
         }
@@ -280,7 +283,7 @@ class API {
             $error = 1;
         }
         if ($error) {
-            $this->sendResponse(415);
+            $this->send(415);
             die();
         } else {
             return true;
