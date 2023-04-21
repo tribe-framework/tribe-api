@@ -4,6 +4,7 @@ namespace Tribe;
 use JetBrains\PhpStorm\NoReturn;
 use alsvanzelf\jsonapi\CollectionDocument;
 use alsvanzelf\jsonapi\ResourceDocument;
+use alsvanzelf\jsonapi\MetaDocument;
 
 class API {
 
@@ -161,6 +162,23 @@ class API {
                             $i++;
                         }
                         $document = CollectionDocument::fromResources(...$documents);
+
+                        $totalObjectsCount= $this->core->getIDsTotalCount(
+                            $search_array = array_merge(
+                                ($_GET['filter'] ?? []), 
+                                ($_GET['modules'] ?? []), 
+                                array('type'=>$this->type)
+                            ), 
+                            $limit,
+                            $sort_field, 
+                            $sort_order,
+                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
+                            $show_partial_search_results = ($_GET['filter'] ? boolval(true) : boolval(false))
+                        );
+
+                        $document->addMeta('total_objects', $totalObjectsCount);
+                        //$document['meta'] = array('total_objects', $totalObjectsCount);
+
                         $document->sendResponse();
                     } 
 
