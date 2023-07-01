@@ -89,7 +89,7 @@ class API {
 
                     $document = new ResourceDocument($this->type, 0);
                     $document->add('modules', $object);
-                    $document->add('slug', $object['slug']);
+                    $document->add('slug', ($object['slug'] ?? 'webapp'));
                     $document->sendResponse();
                 }
 
@@ -143,7 +143,7 @@ class API {
                             $sort_field, 
                             $sort_order,
                             $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
-                            $show_partial_search_results = ($_GET['filter'] ? boolval(true) : boolval(false))
+                            $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false))
                         ))
                     {
                         $objectr = $this->core->getObjects($this->ids);
