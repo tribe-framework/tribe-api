@@ -143,6 +143,7 @@ class API {
                             $sort_field, 
                             $sort_order,
                             $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
+                            $ignore_ids = ($_GET['ignore_ids'] ?? []), 
                             $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false))
                         ))
                     {
@@ -173,6 +174,7 @@ class API {
                             $sort_field, 
                             $sort_order,
                             $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
+                            $ignore_ids = ($_GET['ignore_ids'] ?? []), 
                             $show_partial_search_results = ($_GET['filter'] ? boolval(true) : boolval(false))
                         );
 
