@@ -113,17 +113,23 @@ class API {
 
                     //SORTING
                     if ($_GET['sort'] ?? false) {
-                        $sort_arr = array_map('trim', explode(',', $_GET['sort']));
-                        $sort_field = $sort_order = array();
+                        if ($_GET['sort'] == '(random)') {
+                            $sort_field = '(random)';
+                            $sort_order = 'DESC';
+                        }
+                        else {
+                            $sort_arr = array_map('trim', explode(',', $_GET['sort']));
+                            $sort_field = $sort_order = array();
 
-                        foreach ($sort_arr as $val) {
-                            if (substr($val, 0, 1) == '-') {
-                                $sort_field[] = substr($val, 1, strlen($val));
-                                $sort_order[] = 'DESC';
-                            }
-                            else {
-                                $sort_field[] = $val;
-                                $sort_order[] = 'ASC';
+                            foreach ($sort_arr as $val) {
+                                if (substr($val, 0, 1) == '-') {
+                                    $sort_field[] = substr($val, 1, strlen($val));
+                                    $sort_order[] = 'DESC';
+                                }
+                                else {
+                                    $sort_field[] = $val;
+                                    $sort_order[] = 'ASC';
+                                }
                             }
                         }
                     }
