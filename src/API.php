@@ -22,7 +22,12 @@ class API {
 
         $this->url_parts = explode('/', parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
         $this->type = (string) ($this->url_parts[2] ?? '');
-        $this->id = (int) ($this->url_parts[3] ?? 0);
+
+        if (!is_numeric($this->url_parts[3] ?? false)) {
+            $this->id = (int) $this->core->getAttribute(array('type'=>$this->type, 'slug'=>$this->url_parts[3]), 'id');
+        } else {
+            $this->id = (int) ($this->url_parts[3] ?? 0);
+        }
 
     }
 
