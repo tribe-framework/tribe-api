@@ -54,48 +54,55 @@ class API {
 
             else if ($_SERVER['REQUEST_METHOD'] === 'PATCH') {
                 $object = $this->requestBody;
-                $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
-                unset($object['attributes']);
-                
-                $object = $this->core->getObject($this->core->pushObject($object));
 
-                $document = new ResourceDocument($this->type, $object['id']);
-                $document->add('modules', $object);
-                $document->add('slug', $object['slug']);
-                $document->sendResponse();
+                if ($this->type == 'webapp') {
+
+                    $this->pushTypesObject($object);
+                    $this->getTypesObject();
+
+                } else {
+
+                    $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
+                    unset($object['attributes']);
+                    
+                    $object = $this->core->getObject($this->core->pushObject($object));
+
+                    $document = new ResourceDocument($this->type, $object['id']);
+                    $document->add('modules', $object);
+                    $document->add('slug', $object['slug']);
+                    $document->sendResponse();
+                }
             }
 
             else if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $object = $this->requestBody;
-                $object = array_merge($object['data'], $object['data']['attributes']['modules']);
-                unset($object['attributes']);
 
-                if ($object['type'] == 'user')
-                    $object['user_id'] = $this->auth->getUniqueUserID();
+                if ($this->type == 'webapp') {
 
-                $object = $this->core->getObject($this->core->pushObject($object));
+                    $this->pushTypesObject($object);
+                    $this->getTypesObject();
 
-                $document = new ResourceDocument($this->type, $object['id']);
-                $document->add('modules', $object);
-                $document->add('slug', $object['slug']);
-                $document->sendResponse();
+                } else {
+                    
+                    $object = array_merge($object['data'], $object['data']['attributes']['modules']);
+                    unset($object['attributes']);
+
+                    if ($object['type'] == 'user')
+                        $object['user_id'] = $this->auth->getUniqueUserID();
+
+                    $object = $this->core->getObject($this->core->pushObject($object));
+
+                    $document = new ResourceDocument($this->type, $object['id']);
+                    $document->add('modules', $object);
+                    $document->add('slug', $object['slug']);
+                    $document->sendResponse();
+                }
             }
 
             else {
 
                 if ($this->type == 'webapp') {
-                    $object = $this->config->getTypes();
-
-                    if ( ($_GET['include'] ?? false) && in_array('total_objects', $_GET['include']) ) {
-                        foreach ($object as $key => $value) {
-                            $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
-                        }
-                    }
-
-                    $document = new ResourceDocument($this->type, 0);
-                    $document->add('modules', $object);
-                    $document->add('slug', ($object['slug'] ?? 'webapp'));
-                    $document->sendResponse();
+                    $this->getTypesObject();
                 }
 
                 else if (($this->type ?? false) && !($this->id ?? false)) {
@@ -223,6 +230,31 @@ class API {
             }
         }
 
+    }
+
+    public function pushTypesObject($object) {
+        $folder_path = TRIBE_ROOT . '/uploads/types';
+        if (!is_dir($folder_path)) {
+            mkdir($folder_path);
+        }
+        $types_file_path = $folder_path.'/types-'.time().'.json';
+        file_put_contents($types_file_path, json_encode($object['data']['attributes']['modules'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        unset($object['attributes']);
+    }
+
+    public function getTypesObject() {
+        $object = $this->config->getTypes();
+
+        if ( ($_GET['include'] ?? false) && in_array('total_objects', $_GET['include']) ) {
+            foreach ($object as $key => $value) {
+                $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
+            }
+        }
+
+        $document = new ResourceDocument($this->type, 0);
+        $document->add('modules', $object);
+        $document->add('slug', ($object['slug'] ?? 'webapp'));
+        $document->sendResponse();
     }
 
     /**
