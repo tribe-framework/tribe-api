@@ -19,6 +19,7 @@ class API {
         $this->config = new \Tribe\Config;
         $this->core = new \Tribe\Core;
         $this->auth = new \Tribe\Auth;
+        $this->sql = new \Tribe\MySQL;
 
         $this->url_parts = explode('/', parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
         $this->type = (string) ($this->url_parts[2] ?? '');
@@ -250,6 +251,11 @@ class API {
                 $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
             }
         }
+
+        $sizeRaw = $this->core->executeShellCommand('du -s '.TRIBE_ROOT . '/uploads');
+        $objectsCount = $this->sql->executeSQL("SELECT COUNT(*) AS `count` FROM `data`");
+        $object['webapp']['size_in_gb'] = number_format((float)(explode(' ', $sizeRaw)[0]/1024/1024), 2, '.', '');
+        $object['webapp']['total_objects'] = $objectsCount[0]['count'];
 
         $document = new ResourceDocument($this->type, 0);
         $document->add('modules', $object);
