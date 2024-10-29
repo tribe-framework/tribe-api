@@ -246,10 +246,8 @@ class API {
     public function getTypesObject() {
         $object = $this->config->getTypes();
 
-        if ( ($_GET['include'] ?? false) && in_array('total_objects', $_GET['include']) ) {
-            foreach ($object as $key => $value) {
-                $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
-            }
+        foreach ($object as $key => $value) {
+            $object[$key]['total_objects'] = $this->core->getTypeObjectsCount($key);
         }
 
         $sizeRaw = $this->core->executeShellCommand('du -s '.TRIBE_ROOT . '/uploads');
