@@ -32,7 +32,91 @@ class API {
 
     }
 
+
+    /**
+     * Validates API key authentication and handles exceptions
+     * @param array $api_keys All your API keys stored in a variable
+     * @return void
+     */
+    private function validateApiKey($api_keys) {
+        // Get the API key from the request headers
+        $request_api_key = $this->auth()['token'] ?? $_SERVER['HTTP_X_API_KEY'];
+        
+        $request_domain = parse_url((isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : ''), PHP_URL_HOST);
+        
+        // Get the junction domain
+        $junction_domain = parse_url($_ENV['JUNCTION_URL'], PHP_URL_HOST);
+        
+        // Get the web domain
+        $web_domain = parse_url($_ENV['WEB_URL'], PHP_URL_HOST);
+        
+        // Extract base domains for comparison
+        $request_base_domain = $this->getBaseDomain($request_domain);
+        $web_base_domain = $this->getBaseDomain($web_domain);
+        
+        // Exception cases where authentication is not required
+        if (
+            // Case 1: Same domain as JUNCTION_URL
+            $request_domain === $junction_domain ||
+            // Case 2: Same base/parent domain as WEB_URL
+            $request_base_domain === $web_base_domain ||
+            // Case 3: Environment is not production
+            $_ENV['ENV'] !== 'prod' ||
+            // Case 4: API Key exists and is valid
+            in_array($request_api_key, $api_keys)
+        ) {
+            return;
+        }
+        
+        // If API key is missing
+        else if (!$request_api_key) {
+            $error = [
+                'errors' => [[
+                    'status' => '401',
+                    'title' => 'Unauthorized',
+                    'detail' => 'API key is missing. This resource is only available to authorised applications.'
+                ]]
+            ];
+            $this->json($error)->send(401);
+        }
+        
+        // If API key is invalid
+        else {
+            $error = [
+                'errors' => [[
+                    'status' => '403',
+                    'title' => 'Forbidden',
+                    'detail' => 'Invalid API key.'
+                ]]
+            ];
+            $this->json($error)->send(403);
+        }
+    }
+
+    /**
+     * Helper function to extract base domain from a domain string
+     * @param string $domain Full domain name
+     * @return string Base domain
+     */
+    private function getBaseDomain($domain) {
+        $parts = explode('.', $domain);
+        if (count($parts) > 2) {
+            return implode('.', array_slice($parts, -2));
+        }
+        return $domain;
+    }
+
     public function jsonAPI($version = '1.1') {
+
+        $api_keys = [];
+        if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'))) {
+            $api_keys = array_column(
+                $this->core->getObjects($api_ids), 
+                'apikey'
+            );
+        }
+
+        $this->validateApiKey($api_keys ?? array($_ENV['TRIBE_API_SECRET_KEY']));
 
         if ($version == '1.1') {
 
@@ -267,7 +351,7 @@ class API {
      * jwt. Request only goes through if "allowed_role" matches the role
      * on token.
      */
-    public function auth($allowed_role): array
+    public function auth(): array
     {
         $auth_head = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
 
