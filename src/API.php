@@ -108,6 +108,7 @@ class API {
 
     public function jsonAPI($version = '1.1') {
 
+        /* REVIEW AND INCLUDE THIS CODE
         $api_keys = [];
         if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'))) {
             $api_keys = array_column(
@@ -117,8 +118,11 @@ class API {
         }
 
         $this->validateApiKey($api_keys ?? array($_ENV['TRIBE_API_SECRET_KEY']));
+        */
 
         if ($version == '1.1') {
+            
+            $linked_modules = $this->config->getTypeLinkedModules($this->type);
 
             if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
                 if ($this->id) {
@@ -155,6 +159,47 @@ class API {
                     $document = new ResourceDocument($this->type, $object['id']);
                     $document->add('modules', $object);
                     $document->add('slug', $object['slug']);
+
+                    if ($linked_modules != []) {
+                        foreach ($linked_modules as $module_key => $module_type) {
+                            if (array_key_exists($module_key, $object)) {
+                                $value = $object[$module_key];
+                                $slugs = [];
+                                
+                                if (is_array($value)) {
+                                    $slugs = $value;
+                                } else {
+                                    $slugs = [$value];
+                                }
+                                
+                                if (empty($slugs)) {
+                                    continue;
+                                }
+                                
+                                $query_params = [];
+                                foreach ($slugs as $slug) {
+                                    $query_params[] = [
+                                        'type' => $module_type,
+                                        'slug' => $slug
+                                    ];
+                                }
+                                
+                                $related_objects = $this->core->getObjects($query_params);
+                                
+                                if (!empty($related_objects)) {
+                                    foreach($related_objects as $related_object) {
+                                        if ($related_object['id'] != $object['id']) {
+                                            $ojt = new ResourceDocument($module_type, $related_object['id']);
+                                            $ojt->add('modules', $related_object);
+                                            $ojt->add('slug', $related_object['slug']);
+                                            $document->addRelationship($module_key, $ojt);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     $document->sendResponse();
                 }
             }
@@ -180,6 +225,47 @@ class API {
                     $document = new ResourceDocument($this->type, $object['id']);
                     $document->add('modules', $object);
                     $document->add('slug', $object['slug']);
+
+                    if ($linked_modules != []) {
+                        foreach ($linked_modules as $module_key => $module_type) {
+                            if (array_key_exists($module_key, $object)) {
+                                $value = $object[$module_key];
+                                $slugs = [];
+                                
+                                if (is_array($value)) {
+                                    $slugs = $value;
+                                } else {
+                                    $slugs = [$value];
+                                }
+                                
+                                if (empty($slugs)) {
+                                    continue;
+                                }
+                                
+                                $query_params = [];
+                                foreach ($slugs as $slug) {
+                                    $query_params[] = [
+                                        'type' => $module_type,
+                                        'slug' => $slug
+                                    ];
+                                }
+                                
+                                $related_objects = $this->core->getObjects($query_params);
+                                
+                                if (!empty($related_objects)) {
+                                    foreach($related_objects as $related_object) {
+                                        if ($related_object['id'] != $object['id']) {
+                                            $ojt = new ResourceDocument($module_type, $related_object['id']);
+                                            $ojt->add('modules', $related_object);
+                                            $ojt->add('slug', $related_object['slug']);
+                                            $document->addRelationship($module_key, $ojt);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     $document->sendResponse();
                 }
             }
@@ -260,12 +346,92 @@ class API {
                         }
 
                         $i = 0;
+                        $related_objects_meta = [];
+                        $related_objects_core = [];
+                        $rojt = [];
                         foreach ($objects as $object) {
                             $documents[$i] = new ResourceDocument($this->type, $object['id']);
                             $documents[$i]->add('modules', $object);
                             $documents[$i]->add('slug', $object['slug']);
+
+                            if ($linked_modules != []) {
+                                foreach ($linked_modules as $module_key => $module_type) {
+                                    if (array_key_exists($module_key, $object)) {
+                                        $value = $object[$module_key];
+                                        $slugs = [];
+                                        
+                                        if (is_array($value)) {
+                                            $slugs = $value;
+                                        } else {
+                                            $slugs = [$value];
+                                        }
+                                        
+                                        if (empty($slugs)) {
+                                            continue;
+                                        }
+
+                                        foreach ($slugs as $slug) {
+                                            $related_objects_meta[] = [
+                                                'type' => $module_type,
+                                                'module' => $module_key,
+                                                'slug' => $slug,
+                                            ];
+                                        }
+                                    }
+                                }
+                            }
+
                             $i++;
                         }
+
+                        $i = 0;
+                        if ($linked_modules != []) {
+                            $related_objects_core = $this->core->getObjects($related_objects_meta);
+
+                            foreach ($related_objects_core as $related_object) {
+                                $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
+                            }
+
+                            foreach ($objects as $object) {
+                                foreach ($linked_modules as $module_key => $module_type) {
+                                    if (array_key_exists($module_key, $object)) {
+                                        $value = $object[$module_key];
+                                        $slugs = [];
+                                        
+                                        if (is_array($value)) {
+                                            $slugs = $value;
+                                        } else {
+                                            $slugs = [$value];
+                                        }
+                                        
+                                        if (empty($slugs)) {
+                                            continue;
+                                        }
+
+                                        $query_params = [];
+                                        foreach ($slugs as $slug) {
+                                            $query_params[] = [
+                                                'type' => $module_type,
+                                                'slug' => $slug
+                                            ];
+                                        }
+
+                                        foreach($query_params as $related_object) {
+                                            $related_object['id'] = $rojt[$related_object['type']][$related_object['slug']];
+                                            if (($related_object['id'] ?? false) && $related_object['id'] != $object['id']) {
+                                                $ojt = new ResourceDocument($module_type, $related_object['id']);
+                                                $ojt->add('modules', $related_objects_core[$related_object['id']]);
+                                                $ojt->add('slug', $related_object['slug']);
+                                                $documents[$i]->addRelationship($module_key, $ojt);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                $i++;
+                            }
+                        }
+
                         $document = CollectionDocument::fromResources(...$documents);
 
                         $totalObjectsCount= $this->core->getIDsTotalCount(
@@ -297,10 +463,52 @@ class API {
                 }
 
                 else if (($this->type ?? false) && ($this->id ?? false)) {
+
                     if ($object = $this->core->getObject($this->id)) {
                         $document = new ResourceDocument($this->type, $object['id']);
                         $document->add('modules', $object);
                         $document->add('slug', $object['slug']);
+
+                        if ($linked_modules != []) {
+                            foreach ($linked_modules as $module_key => $module_type) {
+                                if (array_key_exists($module_key, $object)) {
+                                    $value = $object[$module_key];
+                                    $slugs = [];
+                                    
+                                    if (is_array($value)) {
+                                        $slugs = $value;
+                                    } else {
+                                        $slugs = [$value];
+                                    }
+                                    
+                                    if (empty($slugs)) {
+                                        continue;
+                                    }
+                                    
+                                    $query_params = [];
+                                    foreach ($slugs as $slug) {
+                                        $query_params[] = [
+                                            'type' => $module_type,
+                                            'slug' => $slug
+                                        ];
+                                    }
+                                    
+                                    $related_objects = $this->core->getObjects($query_params);
+                                    
+                                    if (!empty($related_objects)) {
+                                        foreach($related_objects as $related_object) {
+                                            if ($related_object['id'] != $object['id']) {
+                                                $ojt = new ResourceDocument($module_type, $related_object['id']);
+                                                $ojt->add('modules', $related_object);
+                                                $ojt->add('slug', $related_object['slug']);
+                                                $document->addRelationship($module_key, $ojt);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         $document->sendResponse();
                     } else {
                         $this->send(404);
