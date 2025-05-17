@@ -106,6 +106,128 @@ class API {
         return $domain;
     }
 
+    /**
+     * Process linked modules for an object and add relationships to the document
+     * 
+     * @param ResourceDocument $document The document to add relationships to
+     * @param array $object The object containing module data
+     * @param array $linked_modules The linked modules configuration
+     * @param array|null $related_objects_core Optional pre-fetched related objects
+     * @param array|null $rojt Optional lookup table for slug-based lookups
+     * @param array|null $id_rojt Optional lookup table for ID-based lookups
+     * @return ResourceDocument The document with added relationships
+     */
+    private function processLinkedModules(
+        ResourceDocument $document, 
+        array $object, 
+        array $linked_modules, 
+        array $related_objects_core = null, 
+        array $rojt = null,
+        array $id_rojt = null
+    ) {
+        foreach ($linked_modules as $module_key => $module_type) {
+            if (array_key_exists($module_key, $object)) {
+                $value = $object[$module_key];
+                
+                // Skip if the value is empty
+                if (empty($value)) {
+                    continue;
+                }
+                
+                // If we don't have pre-fetched related objects, fetch them now
+                if ($related_objects_core === null) {
+                    // Determine the query format based on the value type
+                    if (is_array($value)) {
+                        // Check if it's an array of numeric IDs
+                        if (is_numeric($value[0] ?? '')) {
+                            // Array of IDs: [23, 24, 25] or ["23", "24", "25"]
+                            $related_objects = $this->core->getObjects(implode(',', $value));
+                        } else {
+                            // Array of slugs: ["slug1", "slug2", "slug3"]
+                            $query_params = [];
+                            foreach ($value as $slug) {
+                                $query_params[] = [
+                                    'type' => $module_type,
+                                    'slug' => $slug
+                                ];
+                            }
+                            $related_objects = $this->core->getObjects($query_params);
+                        }
+                    } else if (is_string($value)) {
+                        // Check if it's a comma-separated list of IDs
+                        if (strpos($value, ',') !== false && is_numeric(trim(explode(',', $value)[0]))) {
+                            // Comma-separated IDs: "23, 24, 25"
+                            $related_objects = $this->core->getObjects($value);
+                        } else if (is_numeric($value)) {
+                            // Single numeric ID: "23" or 23
+                            $related_objects = $this->core->getObjects($value);
+                        } else {
+                            // Single slug: "slug1"
+                            $related_objects = [$this->core->getObject([
+                                'type' => $module_type,
+                                'slug' => $value
+                            ])];
+                        }
+                    } else if (is_int($value)) {
+                        $related_objects = [$this->core->getObject($value)];
+                    }
+                    
+                    // Add relationships if related objects were found
+                    if (!empty($related_objects)) {
+                        foreach($related_objects as $related_object) {
+                            if ($related_object['id'] != $object['id']) {
+                                $ojt = new ResourceDocument($module_type, $related_object['id']);
+                                $ojt->add('modules', $related_object);
+                                $ojt->add('slug', $related_object['slug']);
+                                $document->addRelationship($module_key, $ojt);
+                            }
+                        }
+                    }
+                } 
+                // Use pre-fetched related objects (for collection documents)
+                else {
+                    $items_to_process = [];
+                    
+                    // Convert the value to an array of items to process
+                    if (is_array($value)) {
+                        $items_to_process = $value;
+                    } else if (is_string($value) && strpos($value, ',') !== false) {
+                        // Handle comma-separated values
+                        $items_to_process = array_map('trim', explode(',', $value));
+                    } else {
+                        $items_to_process = [$value];
+                    }
+                    
+                    foreach ($items_to_process as $item) {
+                        // For numeric IDs, look up directly in id_rojt
+                        if (is_numeric($item)) {
+                            $related_id = (int)$item;
+                            if (isset($id_rojt[$related_id]) && $related_id != $object['id']) {
+                                $related_object = $id_rojt[$related_id];
+                                $ojt = new ResourceDocument($module_type, $related_id);
+                                $ojt->add('modules', $related_object);
+                                $ojt->add('slug', $related_object['slug'] ?? '');
+                                $document->addRelationship($module_key, $ojt);
+                            }
+                        } 
+                        // For slugs, use the slug-based lookup table
+                        else if (isset($rojt[$module_type][$item])) {
+                            $related_id = $rojt[$module_type][$item];
+                            if ($related_id && $related_id != $object['id'] && isset($related_objects_core[$related_id])) {
+                                $ojt = new ResourceDocument($module_type, $related_id);
+                                $ojt->add('modules', $related_objects_core[$related_id]);
+                                $ojt->add('slug', $item);
+                                $document->addRelationship($module_key, $ojt);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return $document;
+    }
+
     public function jsonAPI($version = '1.1') {
 
         /* REVIEW AND INCLUDE THIS CODE
@@ -161,43 +283,7 @@ class API {
                     $document->add('slug', $object['slug']);
 
                     if ($linked_modules != []) {
-                        foreach ($linked_modules as $module_key => $module_type) {
-                            if (array_key_exists($module_key, $object)) {
-                                $value = $object[$module_key];
-                                $slugs = [];
-                                
-                                if (is_array($value)) {
-                                    $slugs = $value;
-                                } else {
-                                    $slugs = [$value];
-                                }
-                                
-                                if (empty($slugs)) {
-                                    continue;
-                                }
-                                
-                                $query_params = [];
-                                foreach ($slugs as $slug) {
-                                    $query_params[] = [
-                                        'type' => $module_type,
-                                        'slug' => $slug
-                                    ];
-                                }
-                                
-                                $related_objects = $this->core->getObjects($query_params);
-                                
-                                if (!empty($related_objects)) {
-                                    foreach($related_objects as $related_object) {
-                                        if ($related_object['id'] != $object['id']) {
-                                            $ojt = new ResourceDocument($module_type, $related_object['id']);
-                                            $ojt->add('modules', $related_object);
-                                            $ojt->add('slug', $related_object['slug']);
-                                            $document->addRelationship($module_key, $ojt);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        $document = $this->processLinkedModules($document, $object, $linked_modules);
                     }
 
                     $document->sendResponse();
@@ -227,43 +313,7 @@ class API {
                     $document->add('slug', $object['slug']);
 
                     if ($linked_modules != []) {
-                        foreach ($linked_modules as $module_key => $module_type) {
-                            if (array_key_exists($module_key, $object)) {
-                                $value = $object[$module_key];
-                                $slugs = [];
-                                
-                                if (is_array($value)) {
-                                    $slugs = $value;
-                                } else {
-                                    $slugs = [$value];
-                                }
-                                
-                                if (empty($slugs)) {
-                                    continue;
-                                }
-                                
-                                $query_params = [];
-                                foreach ($slugs as $slug) {
-                                    $query_params[] = [
-                                        'type' => $module_type,
-                                        'slug' => $slug
-                                    ];
-                                }
-                                
-                                $related_objects = $this->core->getObjects($query_params);
-                                
-                                if (!empty($related_objects)) {
-                                    foreach($related_objects as $related_object) {
-                                        if ($related_object['id'] != $object['id']) {
-                                            $ojt = new ResourceDocument($module_type, $related_object['id']);
-                                            $ojt->add('modules', $related_object);
-                                            $ojt->add('slug', $related_object['slug']);
-                                            $document->addRelationship($module_key, $ojt);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        $document = $this->processLinkedModules($document, $object, $linked_modules);
                     }
 
                     $document->sendResponse();
@@ -358,24 +408,69 @@ class API {
                                 foreach ($linked_modules as $module_key => $module_type) {
                                     if (array_key_exists($module_key, $object)) {
                                         $value = $object[$module_key];
-                                        $slugs = [];
                                         
-                                        if (is_array($value)) {
-                                            $slugs = $value;
-                                        } else {
-                                            $slugs = [$value];
-                                        }
-                                        
-                                        if (empty($slugs)) {
+                                        // Skip if the value is empty
+                                        if (empty($value)) {
                                             continue;
                                         }
-
-                                        foreach ($slugs as $slug) {
-                                            $related_objects_meta[] = [
-                                                'type' => $module_type,
-                                                'module' => $module_key,
-                                                'slug' => $slug,
-                                            ];
+                                        
+                                        // Process different input formats
+                                        if (is_array($value)) {
+                                            // Handle array of values (could be IDs or slugs)
+                                            foreach ($value as $item) {
+                                                if (is_numeric($item)) {
+                                                    // It's an ID
+                                                    $related_objects_meta[] = [
+                                                        'id' => (int)$item,
+                                                        'module' => $module_key,
+                                                        'type' => $module_type
+                                                    ];
+                                                } else {
+                                                    // It's a slug
+                                                    $related_objects_meta[] = [
+                                                        'type' => $module_type,
+                                                        'module' => $module_key,
+                                                        'slug' => $item,
+                                                    ];
+                                                }
+                                            }
+                                        } else if (is_string($value) && strpos($value, ',') !== false) {
+                                            // Handle comma-separated string
+                                            $items = array_map('trim', explode(',', $value));
+                                            foreach ($items as $item) {
+                                                if (is_numeric($item)) {
+                                                    // It's an ID
+                                                    $related_objects_meta[] = [
+                                                        'id' => (int)$item,
+                                                        'module' => $module_key,
+                                                        'type' => $module_type
+                                                    ];
+                                                } else {
+                                                    // It's a slug
+                                                    $related_objects_meta[] = [
+                                                        'type' => $module_type,
+                                                        'module' => $module_key,
+                                                        'slug' => $item,
+                                                    ];
+                                                }
+                                            }
+                                        } else {
+                                            // Handle single value (could be ID or slug)
+                                            if (is_numeric($value)) {
+                                                // It's an ID
+                                                $related_objects_meta[] = [
+                                                    'id' => (int)$value,
+                                                    'module' => $module_key,
+                                                    'type' => $module_type
+                                                ];
+                                            } else {
+                                                // It's a slug
+                                                $related_objects_meta[] = [
+                                                    'type' => $module_type,
+                                                    'module' => $module_key,
+                                                    'slug' => $value,
+                                                ];
+                                            }
                                         }
                                     }
                                 }
@@ -384,50 +479,36 @@ class API {
                             $i++;
                         }
 
-                        $i = 0;
-                        if ($linked_modules != []) {
+                        if ($linked_modules != [] && !empty($related_objects_meta)) {
+                            // Fetch all related objects at once
                             $related_objects_core = $this->core->getObjects($related_objects_meta);
-
+                            
+                            // Build lookup tables for both slug-based and ID-based lookups
+                            $rojt = [];
+                            $id_rojt = [];
+                            
                             foreach ($related_objects_core as $related_object) {
-                                $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
-                            }
-
-                            foreach ($objects as $object) {
-                                foreach ($linked_modules as $module_key => $module_type) {
-                                    if (array_key_exists($module_key, $object)) {
-                                        $value = $object[$module_key];
-                                        $slugs = [];
-                                        
-                                        if (is_array($value)) {
-                                            $slugs = $value;
-                                        } else {
-                                            $slugs = [$value];
-                                        }
-                                        
-                                        if (empty($slugs)) {
-                                            continue;
-                                        }
-
-                                        $query_params = [];
-                                        foreach ($slugs as $slug) {
-                                            $query_params[] = [
-                                                'type' => $module_type,
-                                                'slug' => $slug
-                                            ];
-                                        }
-
-                                        foreach($query_params as $related_object) {
-                                            $related_object['id'] = $rojt[$related_object['type']][$related_object['slug']];
-                                            if (($related_object['id'] ?? false) && $related_object['id'] != $object['id']) {
-                                                $ojt = new ResourceDocument($module_type, $related_object['id']);
-                                                $ojt->add('modules', $related_objects_core[$related_object['id']]);
-                                                $ojt->add('slug', $related_object['slug']);
-                                                $documents[$i]->addRelationship($module_key, $ojt);
-                                            }
-                                        }
-                                    }
+                                // For slug-based lookups
+                                if (isset($related_object['slug'])) {
+                                    $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
                                 }
-
+                                
+                                // For ID-based lookups - store the object directly by ID
+                                $id_rojt[$related_object['id']] = $related_object;
+                            }
+                            
+                            $i = 0;
+                            // Process each object with the fetched related objects
+                            foreach ($objects as $object) {
+                                // Pass both lookup tables to processLinkedModules
+                                $documents[$i] = $this->processLinkedModules(
+                                    $documents[$i], 
+                                    $object, 
+                                    $linked_modules, 
+                                    $related_objects_core, 
+                                    $rojt,
+                                    $id_rojt
+                                );
                                 $i++;
                             }
                         }
@@ -470,43 +551,7 @@ class API {
                         $document->add('slug', $object['slug']);
 
                         if ($linked_modules != []) {
-                            foreach ($linked_modules as $module_key => $module_type) {
-                                if (array_key_exists($module_key, $object)) {
-                                    $value = $object[$module_key];
-                                    $slugs = [];
-                                    
-                                    if (is_array($value)) {
-                                        $slugs = $value;
-                                    } else {
-                                        $slugs = [$value];
-                                    }
-                                    
-                                    if (empty($slugs)) {
-                                        continue;
-                                    }
-                                    
-                                    $query_params = [];
-                                    foreach ($slugs as $slug) {
-                                        $query_params[] = [
-                                            'type' => $module_type,
-                                            'slug' => $slug
-                                        ];
-                                    }
-                                    
-                                    $related_objects = $this->core->getObjects($query_params);
-                                    
-                                    if (!empty($related_objects)) {
-                                        foreach($related_objects as $related_object) {
-                                            if ($related_object['id'] != $object['id']) {
-                                                $ojt = new ResourceDocument($module_type, $related_object['id']);
-                                                $ojt->add('modules', $related_object);
-                                                $ojt->add('slug', $related_object['slug']);
-                                                $document->addRelationship($module_key, $ojt);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            $document = $this->processLinkedModules($document, $object, $linked_modules);
                         }
 
                         $document->sendResponse();
