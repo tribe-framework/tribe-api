@@ -11,6 +11,8 @@ class API {
     private $response;
     private $request;
     public $requestBody;
+    private $allowed_read_access_api_keys = [];
+    private $allowed_full_access_api_keys = [];
 
     public function __construct()
     {
@@ -30,80 +32,88 @@ class API {
             $this->id = (int) ($this->url_parts[3] ?? 0);
         }
 
+        // Load API keys
+        $this->loadApiKeys();
     }
 
+    /**
+     * Load API keys from the database
+     */
+    private function loadApiKeys() {
+        $this->allowed_read_access_api_keys = $this->allowed_full_access_api_keys = [];
+        if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'), "0, 25", 'id', 'DESC', false)) {
+            $api_objects = $this->core->getObjects($api_ids);
+
+            foreach ($api_objects as $api_object) {
+                if (($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private') && ($api_object['readonly'] === false || $api_object['readonly'] == false))
+                    $this->allowed_full_access_api_keys[] = $api_object['apikey'];
+                else if ($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private')
+                    $this->allowed_read_access_api_keys[] = $api_object['apikey'];
+            }
+        }
+    }
 
     /**
      * Validates API key authentication and handles exceptions
-     * @param array $api_keys All your API keys stored in a variable
-     * @return void
+     * @return bool Whether the request is authorized
      */
-    private function validateApiKey($api_keys) {
+    private function validateApiKey() {
         // Get the API key from the request headers
-        $request_api_key = $this->auth()['token'] ?? $_SERVER['HTTP_X_API_KEY'];
+        $request_api_key = $_SERVER['HTTP_X_API_KEY'] ?? null;
         
+        // Get the request domain
         $request_domain = parse_url((isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : ''), PHP_URL_HOST);
         
-        // Get the junction domain
-        $junction_domain = parse_url($_ENV['JUNCTION_URL'], PHP_URL_HOST);
+        // Get the instance slug from the environment
+        $instance_slug = (explode('.', $request_domain)[0]) ?? '';
         
-        // Get the web domain
-        $web_domain = parse_url($_ENV['WEB_URL'], PHP_URL_HOST);
-        
-        // Extract base domains for comparison
-        $request_base_domain = $this->getBaseDomain($request_domain);
-        $web_base_domain = $this->getBaseDomain($web_domain);
-        
-        // Exception cases where authentication is not required
-        if (
-            // Case 1: Same domain as JUNCTION_URL
-            $request_domain === $junction_domain ||
-            // Case 2: Same base/parent domain as WEB_URL
-            $request_base_domain === $web_base_domain ||
-            // Case 3: Environment is not production
-            $_ENV['ENV'] !== 'prod' ||
-            // Case 4: API Key exists and is valid
-            in_array($request_api_key, $api_keys)
-        ) {
-            return;
-        }
-        
-        // If API key is missing
-        else if (!$request_api_key) {
-            $error = [
-                'errors' => [[
-                    'status' => '401',
-                    'title' => 'Unauthorized',
-                    'detail' => 'API key is missing. This resource is only available to authorised applications.'
-                ]]
+        // Check if the request is coming from a Junction domain
+        $is_junction_domain = false;
+        if (!empty($request_domain)) {
+            $junction_domains = [
+                "$instance_slug.junction.express",
+                "$instance_slug.tribe.junction.express"
             ];
-            $this->json($error)->send(401);
+            
+            foreach ($junction_domains as $domain) {
+                if (strpos($request_domain, $domain) !== false) {
+                    $is_junction_domain = true;
+                    break;
+                }
+            }
         }
         
-        // If API key is invalid
-        else {
-            $error = [
-                'errors' => [[
-                    'status' => '403',
-                    'title' => 'Forbidden',
-                    'detail' => 'Invalid API key.'
-                ]]
-            ];
-            $this->json($error)->send(403);
+        // Get the request method
+        $request_method = strtoupper($_SERVER['REQUEST_METHOD']);
+        
+        // Get the type configuration to check if API access is locked
+        $typesJSON = $this->config->getType($this->type);
+        $block_read_access_without_apikey = isset($typesJSON['block_read_access_without_apikey']) && $typesJSON['block_read_access_without_apikey'] === true;
+        
+        // Allow all operations for Junction domains
+        if ($is_junction_domain) {
+            return true;
         }
-    }
-
-    /**
-     * Helper function to extract base domain from a domain string
-     * @param string $domain Full domain name
-     * @return string Base domain
-     */
-    private function getBaseDomain($domain) {
-        $parts = explode('.', $domain);
-        if (count($parts) > 2) {
-            return implode('.', array_slice($parts, -2));
+        
+        // For read operations (GET)
+        if ($request_method === 'GET') {
+            // If API access is locked, require a valid API key
+            if ($block_read_access_without_apikey) {
+                return in_array($request_api_key, $this->allowed_read_access_api_keys);
+            }
+            
+            // By default, allow all GET requests
+            return true;
         }
-        return $domain;
+        
+        // For write operations (POST, PUT, PATCH, DELETE)
+        if (in_array($request_method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
+            // Require a valid API key with full access
+            return in_array($request_api_key, $this->allowed_full_access_api_keys);
+        }
+        
+        // Default deny for unrecognized methods
+        return false;
     }
 
     /**
@@ -245,18 +255,18 @@ class API {
     }
 
     public function jsonAPI($version = '1.1') {
-
-        /* REVIEW AND INCLUDE THIS CODE
-        $api_keys = [];
-        if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'))) {
-            $api_keys = array_column(
-                $this->core->getObjects($api_ids), 
-                'apikey'
-            );
+        // Validate API key for all requests
+        if (!$this->validateApiKey()) {
+            $error = [
+                'errors' => [[
+                    'status' => '403',
+                    'title' => 'Forbidden',
+                    'detail' => 'You do not have permission to access this resource.'
+                ]]
+            ];
+            $this->json($error)->send(403);
+            return;
         }
-
-        $this->validateApiKey($api_keys ?? array($_ENV['TRIBE_API_SECRET_KEY']));
-        */
 
         if ($version == '1.1') {
             
@@ -583,7 +593,6 @@ class API {
                 }
             }
         }
-
     }
 
     public function pushTypesObject($object) {
