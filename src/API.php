@@ -174,13 +174,21 @@ class API {
                     
                     // Add relationships if related objects were found
                     if (!empty($related_objects)) {
+                        // Create an array of relationship objects
+                        $relationships = [];
+                        
                         foreach($related_objects as $related_object) {
-                            if ($related_object['id'] != $object['id']) {
+                            if ($related_object && $related_object['id'] != $object['id']) {
                                 $ojt = new ResourceDocument($module_type, $related_object['id']);
                                 $ojt->add('modules', $related_object);
                                 $ojt->add('slug', $related_object['slug']);
-                                $document->addRelationship($module_key, $ojt);
+                                $relationships[] = $ojt;
                             }
+                        }
+                        
+                        // Add all relationships at once as a collection
+                        if (!empty($relationships)) {
+                            $document->addRelationship($module_key, $relationships);
                         }
                     }
                 } 
@@ -198,6 +206,9 @@ class API {
                         $items_to_process = [$value];
                     }
                     
+                    // Create an array of relationship objects
+                    $relationships = [];
+                    
                     foreach ($items_to_process as $item) {
                         // For numeric IDs, look up directly in id_rojt
                         if (is_numeric($item)) {
@@ -207,7 +218,7 @@ class API {
                                 $ojt = new ResourceDocument($module_type, $related_id);
                                 $ojt->add('modules', $related_object);
                                 $ojt->add('slug', $related_object['slug'] ?? '');
-                                $document->addRelationship($module_key, $ojt);
+                                $relationships[] = $ojt;
                             }
                         } 
                         // For slugs, use the slug-based lookup table
@@ -217,9 +228,14 @@ class API {
                                 $ojt = new ResourceDocument($module_type, $related_id);
                                 $ojt->add('modules', $related_objects_core[$related_id]);
                                 $ojt->add('slug', $item);
-                                $document->addRelationship($module_key, $ojt);
+                                $relationships[] = $ojt;
                             }
                         }
+                    }
+                    
+                    // Add all relationships at once as a collection
+                    if (!empty($relationships)) {
+                        $document->addRelationship($module_key, $relationships);
                     }
                 }
             }
