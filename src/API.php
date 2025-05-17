@@ -13,6 +13,7 @@ class API {
     public $requestBody;
     private $allowed_read_access_api_keys = [];
     private $allowed_full_access_api_keys = [];
+    private $api_objects = [];
 
     public function __construct()
     {
@@ -34,6 +35,40 @@ class API {
 
         // Load API keys
         $this->loadApiKeys();
+        
+        // Handle CORS for API requests
+        $this->handleCors();
+    }
+
+    /**
+     * Handle CORS headers for API requests
+     * This method should be called early in the request lifecycle
+     */
+    private function handleCors() {
+        // Get the request origin
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? $_SERVER['HTTP_HOST'] ?? '*';
+        
+        // Get the request method
+        $request_method = $_SERVER['REQUEST_METHOD'];
+        
+        // Set CORS headers for all responses
+        header("Access-Control-Allow-Origin: $origin");
+        header("Access-Control-Allow-Credentials: true");
+        header("Access-Control-Max-Age: 86400"); // Cache preflight for 24 hours
+        
+        // Set allowed headers - include X-API-KEY explicitly
+        header("Access-Control-Allow-Headers: Content-Type, Authorization, X-API-KEY, X-Requested-With, Accept, Origin");
+        header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS");
+        
+        // Handle preflight OPTIONS request
+        if ($request_method === 'OPTIONS') {
+            // Just exit with 200 OK for preflight requests
+            http_response_code(200);
+            exit(0);
+        }
+        
+        // Continue with the regular request processing
+        return;
     }
 
     /**
@@ -41,11 +76,16 @@ class API {
      */
     private function loadApiKeys() {
         $this->allowed_read_access_api_keys = $this->allowed_full_access_api_keys = [];
+        $this->api_objects = []; // Store all API objects for domain validation
+        
         if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'), "0, 25", 'id', 'DESC', false)) {
             $api_objects = $this->core->getObjects($api_ids);
 
             foreach ($api_objects as $api_object) {
-                if (($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private') && ($api_object['readonly'] === false || $api_object['readonly'] == false))
+                // Store the full API object for later use
+                $this->api_objects[$api_object['apikey']] = $api_object;
+                
+                if (($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private') && (($api_object['readonly'] ?? false) === false || $api_object['readonly'] == false))
                     $this->allowed_full_access_api_keys[] = $api_object['apikey'];
                 else if ($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private')
                     $this->allowed_read_access_api_keys[] = $api_object['apikey'];
@@ -58,11 +98,18 @@ class API {
      * @return bool Whether the request is authorized
      */
     private function validateApiKey() {
-        // Get the API key from the request headers
-        $request_api_key = $_SERVER['HTTP_X_API_KEY'] ?? null;
+        // Extract the token if it's in Bearer format
+        $request_api_key = null;
+        $auth_header = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+        if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
+            $request_api_key = substr($auth_header, 7);
+        }
         
         // Get the request domain
         $request_domain = parse_url((isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : ''), PHP_URL_HOST);
+        if (empty($request_domain)) {
+            $request_domain = $_SERVER['HTTP_HOST'] ?? '';
+        }
         
         // Get the instance slug from the environment
         $instance_slug = (explode('.', $request_domain)[0]) ?? '';
@@ -72,7 +119,8 @@ class API {
         if (!empty($request_domain)) {
             $junction_domains = [
                 "$instance_slug.junction.express",
-                "$instance_slug.tribe.junction.express"
+                "$instance_slug.tribe.junction.express",
+                "tribe.junction.express"
             ];
             
             foreach ($junction_domains as $domain) {
@@ -83,27 +131,75 @@ class API {
             }
         }
         
+        // Check if the request is from localhost
+        $is_localhost = in_array($request_domain, ['localhost', '127.0.0.1']) || 
+                        strpos($request_domain, 'localhost:') === 0 || 
+                        strpos($request_domain, '127.0.0.1:') === 0;
+        
         // Get the request method
         $request_method = strtoupper($_SERVER['REQUEST_METHOD']);
         
         // Get the type configuration to check if API access is locked
-        $typesJSON = $this->config->getType($this->type);
+        $typesJSON = $this->config->getTypes();
         $block_read_access_without_apikey = isset($typesJSON['block_read_access_without_apikey']) && $typesJSON['block_read_access_without_apikey'] === true;
         
         // Allow all operations for Junction domains
         if ($is_junction_domain) {
             return true;
         }
+
+        // Check if API key is valid and has special permissions
+        if ($request_api_key && isset($this->api_objects[$request_api_key])) {
+            $api_object = $this->api_objects[$request_api_key];
+            
+            // Check for dev mode with localhost
+            if (isset($api_object['devmode']) && $api_object['devmode'] === true && $is_localhost) {
+                return true; // Allow all operations in dev mode from localhost
+            }
+            
+            // Check for whitelisted domains
+            if (!empty($api_object['whitelisted_domains'])) {
+                $whitelisted_domains = array_map('trim', explode("\n", $api_object['whitelisted_domains']));
+                
+                foreach ($whitelisted_domains as $domain_pattern) {
+                    // Convert wildcard pattern to regex
+                    if (strpos($domain_pattern, '*') !== false) {
+                        $pattern = '/^' . str_replace('*', '.*', preg_quote($domain_pattern, '/')) . '$/i';
+                        if (preg_match($pattern, $request_domain)) {
+                            // For read operations, any valid API key is sufficient
+                            if ($request_method === 'GET') {
+                                return true;
+                            }
+                            // For write operations, need full access API key
+                            else if (in_array($request_method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
+                                return in_array($request_api_key, $this->allowed_full_access_api_keys);
+                            }
+                        }
+                    } 
+                    // Exact domain match
+                    else if (strtolower($domain_pattern) === strtolower($request_domain)) {
+                        // For read operations, any valid API key is sufficient
+                        if ($request_method === 'GET') {
+                            return true;
+                        }
+                        // For write operations, need full access API key
+                        else if (in_array($request_method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
+                            return in_array($request_api_key, $this->allowed_full_access_api_keys);
+                        }
+                    }
+                }
+            }
+        }
         
         // For read operations (GET)
         if ($request_method === 'GET') {
             // If API access is locked, require a valid API key
-            if ($block_read_access_without_apikey) {
+            //Webapp data cannot be accessed publicly
+            if ($block_read_access_without_apikey || $this->type == 'webapp') {
                 return in_array($request_api_key, $this->allowed_read_access_api_keys);
+            } else {
+                return true;
             }
-            
-            // By default, allow all GET requests
-            return true;
         }
         
         // For write operations (POST, PUT, PATCH, DELETE)
@@ -261,7 +357,7 @@ class API {
                 'errors' => [[
                     'status' => '403',
                     'title' => 'Forbidden',
-                    'detail' => 'You do not have permission to access this resource.'
+                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain and from a secure HTTPS link. Use Junction to generate API keys and whitelist your domains.'
                 ]]
             ];
             $this->json($error)->send(403);
@@ -624,29 +720,6 @@ class API {
     }
 
     /**
-     * allow access to api only if the request meets certain permissions
-     * this function fetches bearer_token from auth header and verifies the
-     * jwt. Request only goes through if "allowed_role" matches the role
-     * on token.
-     */
-    public function auth(): array
-    {
-        $auth_head = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
-
-        if (!$auth_head) {
-            return ["Bearer" => null];
-        }
-
-        $auth_head = \explode(' ', $auth_head);
-
-        if ($auth_head[0] == "Bearer") {
-            $auth_head = [ "token" => $auth_head[1] ?? "" ];
-        }
-
-        return $auth_head;
-    }
-
-    /**
      * returns the request body as an array
      */
     public function body(): array
@@ -671,10 +744,18 @@ class API {
     #[NoReturn]
     public function send(int $status_code = 200)
     {
-        // set header and status code
+        // Set content type header
         header('Content-Type: application/vnd.api+json');
+        
+        // Set CORS headers again to ensure they're included in all responses
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? $_SERVER['HTTP_HOST'] ?? '*';
+        header("Access-Control-Allow-Origin: $origin");
+        header("Access-Control-Allow-Credentials: true");
+        
+        // Set the HTTP status code
         http_response_code($status_code);
 
+        // Output the response
         echo $this->response;
         die();
     }
