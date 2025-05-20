@@ -242,20 +242,24 @@ class API {
                 
                 // If we don't have pre-fetched related objects, fetch them now
                 if ($related_objects_core === null) {
+                    $related_objects = [];
+                    
                     // Determine the query format based on the value type
                     if (is_array($value)) {
                         // Check if it's an array of numeric IDs
-                        if (is_numeric($value[0] ?? '')) {
+                        if (!empty($value) && is_numeric($value[0] ?? '')) {
                             // Array of IDs: [23, 24, 25] or ["23", "24", "25"]
                             $related_objects = $this->core->getObjects(implode(',', $value));
                         } else {
                             // Array of slugs: ["slug1", "slug2", "slug3"]
                             $query_params = [];
                             foreach ($value as $slug) {
-                                $query_params[] = [
-                                    'type' => $module_type,
-                                    'slug' => $slug
-                                ];
+                                if (!empty($slug)) {
+                                    $query_params[] = [
+                                        'type' => $module_type,
+                                        'slug' => $slug
+                                    ];
+                                }
                             }
                             $related_objects = $this->core->getObjects($query_params);
                         }
@@ -269,27 +273,46 @@ class API {
                             $related_objects = $this->core->getObjects($value);
                         } else {
                             // Single slug: "slug1"
-                            $related_objects = [$this->core->getObject([
+                            $obj = $this->core->getObject([
                                 'type' => $module_type,
                                 'slug' => $value
-                            ])];
+                            ]);
+                            if ($obj) {
+                                $related_objects = [$obj];
+                            }
                         }
                     } else if (is_int($value)) {
-                        $related_objects = [$this->core->getObject($value)];
+                        $obj = $this->core->getObject($value);
+                        if ($obj) {
+                            $related_objects = [$obj];
+                        }
                     }
                     
                     // Add relationships if related objects were found
                     if (!empty($related_objects)) {
                         // Create an array of relationship objects
                         $relationships = [];
+                        $processed_ids = []; // Track already processed IDs
                         
                         foreach($related_objects as $related_object) {
-                            if ($related_object && $related_object['id'] != $object['id']) {
-                                $ojt = new ResourceDocument($module_type, $related_object['id']);
-                                $ojt->add('modules', $related_object);
-                                $ojt->add('slug', $related_object['slug']);
-                                $relationships[] = $ojt;
+                            if (empty($related_object) || !isset($related_object['id'])) {
+                                continue;
                             }
+                            
+                            $related_id = $related_object['id'];
+                            
+                            // Skip if this is the same as the current object or already processed
+                            if ($related_id == $object['id'] || isset($processed_ids[$related_id])) {
+                                continue;
+                            }
+                            
+                            // Mark as processed
+                            $processed_ids[$related_id] = true;
+                            
+                            $ojt = new ResourceDocument($module_type, $related_id);
+                            $ojt->add('modules', $related_object);
+                            $ojt->add('slug', $related_object['slug'] ?? '');
+                            $relationships[] = $ojt;
                         }
                         
                         // Add all relationships at once as a collection
@@ -314,28 +337,52 @@ class API {
                     
                     // Create an array of relationship objects
                     $relationships = [];
+                    $processed_ids = []; // Track already processed IDs
                     
                     foreach ($items_to_process as $item) {
+                        if (empty($item)) {
+                            continue;
+                        }
+                        
                         // For numeric IDs, look up directly in id_rojt
                         if (is_numeric($item)) {
                             $related_id = (int)$item;
-                            if (isset($id_rojt[$related_id]) && $related_id != $object['id']) {
-                                $related_object = $id_rojt[$related_id];
-                                $ojt = new ResourceDocument($module_type, $related_id);
-                                $ojt->add('modules', $related_object);
-                                $ojt->add('slug', $related_object['slug'] ?? '');
-                                $relationships[] = $ojt;
+                            
+                            // Skip if already processed, same as current object, or not found
+                            if (isset($processed_ids[$related_id]) || 
+                                $related_id == $object['id'] || 
+                                !isset($id_rojt[$related_id])) {
+                                continue;
                             }
+                            
+                            // Mark as processed
+                            $processed_ids[$related_id] = true;
+                            
+                            $related_object = $id_rojt[$related_id];
+                            $ojt = new ResourceDocument($module_type, $related_id);
+                            $ojt->add('modules', $related_object);
+                            $ojt->add('slug', $related_object['slug'] ?? '');
+                            $relationships[] = $ojt;
                         } 
                         // For slugs, use the slug-based lookup table
                         else if (isset($rojt[$module_type][$item])) {
                             $related_id = $rojt[$module_type][$item];
-                            if ($related_id && $related_id != $object['id'] && isset($related_objects_core[$related_id])) {
-                                $ojt = new ResourceDocument($module_type, $related_id);
-                                $ojt->add('modules', $related_objects_core[$related_id]);
-                                $ojt->add('slug', $item);
-                                $relationships[] = $ojt;
+                            
+                            // Skip if already processed, invalid ID, or not found
+                            if (isset($processed_ids[$related_id]) || 
+                                !$related_id || 
+                                $related_id == $object['id'] || 
+                                !isset($related_objects_core[$related_id])) {
+                                continue;
                             }
+                            
+                            // Mark as processed
+                            $processed_ids[$related_id] = true;
+                            
+                            $ojt = new ResourceDocument($module_type, $related_id);
+                            $ojt->add('modules', $related_objects_core[$related_id]);
+                            $ojt->add('slug', $item);
+                            $relationships[] = $ojt;
                         }
                     }
                     
