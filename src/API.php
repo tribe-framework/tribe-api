@@ -404,7 +404,7 @@ class API {
                 'errors' => [[
                     'status' => '403',
                     'title' => 'Forbidden',
-                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain and from a secure HTTPS link. Use Junction to generate API keys and whitelist your domains.'
+                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
                 ]]
             ];
             $this->json($error)->send(403);
