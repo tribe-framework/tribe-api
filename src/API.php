@@ -14,6 +14,7 @@ class API {
     private $allowed_read_access_api_keys = [];
     private $allowed_full_access_api_keys = [];
     private $api_objects = [];
+    private $thisRequestHasApiAccess = false;
 
     public function __construct()
     {
@@ -190,20 +191,28 @@ class API {
                 }
             }
         }
-        
+       
+        $is_allowed = in_array($request_api_key, $this->allowed_read_access_api_keys);
+
+        if (!$is_allowed) {
+            $this->thisRequestHasApiAccess = false;
+            $_GET['show_public_objects_only'] = true;
+        } else {
+            $this->thisRequestHasApiAccess = true;
+        }
+
         // For read operations (GET)
-        if ($request_method === 'GET') {
+        if (!isset($request_method) || $request_method == 'GET' || $request_method == '') {
             // If API access is locked, require a valid API key
             //Webapp data cannot be accessed publicly
-            if ($block_read_access_without_apikey || $this->type == 'webapp') {
-                return in_array($request_api_key, $this->allowed_read_access_api_keys);
+            if ($block_read_access_without_apikey || $this->type == 'webapp' || $this->type == 'apikey_record') {
+                return $is_allowed;
             } else {
                 return true;
             }
         }
-        
         // For write operations (POST, PUT, PATCH, DELETE)
-        if (in_array($request_method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
+        else if (in_array($request_method, ['POST', 'PUT', 'PATCH', 'DELETE'])) {
             // Require a valid API key with full access
             return in_array($request_api_key, $this->allowed_full_access_api_keys);
         }
@@ -723,7 +732,21 @@ class API {
                             $document = $this->processLinkedModules($document, $object, $linked_modules);
                         }
 
-                        $document->sendResponse();
+                        if ($this->thisRequestHasApiAccess) {
+                            $document->sendResponse();
+                        } else if ($object['content_privacy'] == 'public') {
+                            $document->sendResponse();
+                        } else {
+                            $error = [
+                                'errors' => [[
+                                    'status' => '403',
+                                    'title' => 'Forbidden',
+                                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
+                                ]]
+                            ];
+                            $this->json($error)->send(403);
+                            die();
+                        }
                     } else {
                         $this->send(404);
                         die();
