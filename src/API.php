@@ -87,7 +87,8 @@ class API {
     /**
      * Load API keys from the database
      */
-    private function loadApiKeys() {
+    private function loadApiKeys()
+    {
         $this->allowed_read_access_api_keys = $this->allowed_full_access_api_keys = [];
         $this->api_objects = []; // Store all API objects for domain validation
         $api_ids = $this->core->getIDs(array('type'=>'apikey_record'), "0, 25", 'id', 'DESC', false);
@@ -436,233 +437,200 @@ class API {
         // Validate API key for all requests
         if (!$this->validateApiKey()) {
             $error = [
-                'errors' => [[
-                    'status' => '403',
-                    'title' => 'Forbidden',
-                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
-                ]]
+                'errors' => [
+                    array(
+                        'status' => '403',
+                        'title' => 'Forbidden',
+                        'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
+                    )
+                ]
             ];
             $this->json($error)->send(403);
         }
 
-        if ($version == '1.1') {
+        if ($version !== '1.1') {
+            return;
+        }
 
-            $linked_modules = $this->config->getTypeLinkedModules($this->type);
+        // version 1.1
+        $linked_modules = $this->config->getTypeLinkedModules($this->type);
 
-            if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
-                if ($this->id) {
-                    if ($this->core->deleteObject($this->id)) {
-                        $document = new ResourceDocument();
-                        $document->sendResponse();
+        if ($this->method('DELETE')) {
+            // return 404 if id isn't provided
+            if (!$this->id) {
+                $this->send(404);
+            }
+
+            if ($this->core->deleteObject($this->id)) {
+                $document = new ResourceDocument();
+                $document->sendResponse();
+                die();
+            }
+            else {
+                $this->send(404);
+            }
+        }
+        elseif ($this->method('PATCH')) {
+            $object = $this->requestBody;
+
+            if ($this->type == 'webapp') {
+
+                $this->pushTypesObject($object);
+                $this->getTypesObject();
+
+            } else {
+
+                $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
+                unset($object['attributes']);
+
+                $object = $this->core->getObject($this->core->pushObject($object));
+
+                $document = new ResourceDocument($this->type, $object['id']);
+                $document->add('modules', $object);
+                $document->add('slug', $object['slug']);
+
+                if ($linked_modules != []) {
+                    $document = $this->processLinkedModules($document, $object, $linked_modules);
+                }
+
+                $document->sendResponse();
+            }
+        }
+        elseif ($this->method('POST')) {
+            $object = $this->requestBody;
+
+            if ($this->type == 'webapp') {
+
+                $this->pushTypesObject($object);
+                $this->getTypesObject();
+
+            } else {
+
+                $object = array_merge($object['data'], $object['data']['attributes']['modules']);
+                unset($object['attributes']);
+
+                if ($object['type'] == 'user')
+                    $object['user_id'] = $this->auth->getUniqueUserID();
+
+                $object = $this->core->getObject($this->core->pushObject($object));
+
+                $document = new ResourceDocument($this->type, $object['id']);
+                $document->add('modules', $object);
+                $document->add('slug', $object['slug']);
+
+                if ($linked_modules != []) {
+                    $document = $this->processLinkedModules($document, $object, $linked_modules);
+                }
+
+                $document->sendResponse();
+            }
+        }
+        elseif ($this->method('GET')) {
+            if ($this->type == 'webapp') {
+                $this->getTypesObject();
+            }
+            else if (($this->type ?? false) && !($this->id ?? false)) {
+                //PAGINATION
+                $limit = "0, 25";
+                $limitParam  = filter_var($_GET['page']['limit'] ?? null, FILTER_VALIDATE_INT, ['options' => ['default' => 25]]);
+                $offsetParam = filter_var($_GET['page']['offset'] ?? null, FILTER_VALIDATE_INT, ['options' => ['default' => 0]]);
+
+                if ($limitParam != '-1') {
+                    if (!$offsetParam) {
+                        $offsetParam = 0;
+                    }
+
+                    if (!$limitParam) {
+                        $limitParam = 25;
+                    }
+
+                    if ($limitParam !== null && $offsetParam !== null) {
+                        $limit = "$offsetParam, $limitParam";
+                    } elseif ($limitParam !== null) {
+                        $limit = $limitParam;
+                    }
+                } else {
+                    $limit = "";
+                }
+
+                //SORTING
+                if ($_GET['sort'] ?? false) {
+                    if ($_GET['sort'] == '(random)') {
+                        $sort_field = '(random)';
+                        $sort_order = 'DESC';
                     }
                     else {
-                        $this->send(404);
-                        die();
-                    }
-                }
-                else {
-                    $this->send(404);
-                    die();
-                }
-            }
+                        $sort_arr = array_map('trim', explode(',', $_GET['sort']));
+                        $sort_field = $sort_order = array();
 
-            else if ($_SERVER['REQUEST_METHOD'] === 'PATCH') {
-                $object = $this->requestBody;
-
-                if ($this->type == 'webapp') {
-
-                    $this->pushTypesObject($object);
-                    $this->getTypesObject();
-
-                } else {
-
-                    $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
-                    unset($object['attributes']);
-
-                    $object = $this->core->getObject($this->core->pushObject($object));
-
-                    $document = new ResourceDocument($this->type, $object['id']);
-                    $document->add('modules', $object);
-                    $document->add('slug', $object['slug']);
-
-                    if ($linked_modules != []) {
-                        $document = $this->processLinkedModules($document, $object, $linked_modules);
-                    }
-
-                    $document->sendResponse();
-                }
-            }
-
-            else if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-                $object = $this->requestBody;
-
-                if ($this->type == 'webapp') {
-
-                    $this->pushTypesObject($object);
-                    $this->getTypesObject();
-
-                } else {
-
-                    $object = array_merge($object['data'], $object['data']['attributes']['modules']);
-                    unset($object['attributes']);
-
-                    if ($object['type'] == 'user')
-                        $object['user_id'] = $this->auth->getUniqueUserID();
-
-                    $object = $this->core->getObject($this->core->pushObject($object));
-
-                    $document = new ResourceDocument($this->type, $object['id']);
-                    $document->add('modules', $object);
-                    $document->add('slug', $object['slug']);
-
-                    if ($linked_modules != []) {
-                        $document = $this->processLinkedModules($document, $object, $linked_modules);
-                    }
-
-                    $document->sendResponse();
-                }
-            }
-
-            else {
-
-                if ($this->type == 'webapp') {
-                    $this->getTypesObject();
-                }
-
-                else if (($this->type ?? false) && !($this->id ?? false)) {
-
-                    //PAGINATION
-                    $limit = "0, 25";
-                    if ($_GET['page']['limit'] != '-1') {
-                        if (!($_GET['page']['offset'] ?? false))
-                            $_GET['page']['offset'] = 0;
-                        if (!($_GET['page']['limit'] ?? false))
-                            $_GET['page']['limit'] = 25;
-
-                        if (($_GET['page']['limit'] ?? false) !== null && ($_GET['page']['offset'] ?? false) !== null)
-                            $limit = "{$_GET['page']['offset']}, {$_GET['page']['limit']}";
-                        else if (($_GET['page']['limit'] ?? false) !== null)
-                            $limit = $_GET['page']['limit'];
-                    } else {
-                        $limit = "";
-                    }
-
-                    //SORTING
-                    if ($_GET['sort'] ?? false) {
-                        if ($_GET['sort'] == '(random)') {
-                            $sort_field = '(random)';
-                            $sort_order = 'DESC';
-                        }
-                        else {
-                            $sort_arr = array_map('trim', explode(',', $_GET['sort']));
-                            $sort_field = $sort_order = array();
-
-                            foreach ($sort_arr as $val) {
-                                if (substr($val, 0, 1) == '-') {
-                                    $sort_field[] = substr($val, 1, strlen($val));
-                                    $sort_order[] = 'DESC';
-                                }
-                                else {
-                                    $sort_field[] = $val;
-                                    $sort_order[] = 'ASC';
-                                }
+                        foreach ($sort_arr as $val) {
+                            if (substr($val, 0, 1) == '-') {
+                                $sort_field[] = substr($val, 1, strlen($val));
+                                $sort_order[] = 'DESC';
+                            }
+                            else {
+                                $sort_field[] = $val;
+                                $sort_order[] = 'ASC';
                             }
                         }
                     }
-                    else {
-                        $sort_field = 'id';
-                        $sort_order = 'DESC';
+                }
+                else {
+                    $sort_field = 'id';
+                    $sort_order = 'DESC';
+                }
+
+                //getting IDs
+                if ($this->ids = $this->core->getIDs(
+                        $search_array = array_merge(
+                            ($_GET['filter'] ?? []),
+                            ($_GET['modules'] ?? []),
+                            array('type'=>$this->type)
+                        ),
+                        $limit,
+                        $sort_field,
+                        $sort_order,
+                        $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
+                        $ignore_ids = ($_GET['ignore_ids'] ?? []),
+                        $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
+                        false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
+                    ))
+                {
+                    $objectr = $this->core->getObjects($this->ids);
+                    $objects = [];
+
+                    //to sort accurately
+                    foreach ($this->ids as $this->idr) {
+                        $objects[] = $objectr[$this->idr['id']];
                     }
 
-                    //getting IDs
-                    if ($this->ids = $this->core->getIDs(
-                            $search_array = array_merge(
-                                ($_GET['filter'] ?? []),
-                                ($_GET['modules'] ?? []),
-                                array('type'=>$this->type)
-                            ),
-                            $limit,
-                            $sort_field,
-                            $sort_order,
-                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
-                            $ignore_ids = ($_GET['ignore_ids'] ?? []),
-                            $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
-                            false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
-                        ))
-                    {
-                        $objectr = $this->core->getObjects($this->ids);
-                        $objects = [];
+                    $i = 0;
+                    $related_objects_meta = [];
+                    $related_objects_core = [];
+                    $rojt = [];
+                    foreach ($objects as $object) {
+                        $documents[$i] = new ResourceDocument($this->type, $object['id']);
+                        $documents[$i]->add('modules', $object);
+                        $documents[$i]->add('slug', $object['slug']);
 
-                        //to sort accurately
-                        foreach ($this->ids as $this->idr) {
-                            $objects[] = $objectr[$this->idr['id']];
-                        }
+                        if ($linked_modules != []) {
+                            foreach ($linked_modules as $module_key => $module_type) {
+                                if (array_key_exists($module_key, $object)) {
+                                    $value = $object[$module_key];
 
-                        $i = 0;
-                        $related_objects_meta = [];
-                        $related_objects_core = [];
-                        $rojt = [];
-                        foreach ($objects as $object) {
-                            $documents[$i] = new ResourceDocument($this->type, $object['id']);
-                            $documents[$i]->add('modules', $object);
-                            $documents[$i]->add('slug', $object['slug']);
+                                    // Skip if the value is empty
+                                    if (empty($value)) {
+                                        continue;
+                                    }
 
-                            if ($linked_modules != []) {
-                                foreach ($linked_modules as $module_key => $module_type) {
-                                    if (array_key_exists($module_key, $object)) {
-                                        $value = $object[$module_key];
-
-                                        // Skip if the value is empty
-                                        if (empty($value)) {
-                                            continue;
-                                        }
-
-                                        // Process different input formats
-                                        if (is_array($value)) {
-                                            // Handle array of values (could be IDs or slugs)
-                                            foreach ($value as $item) {
-                                                if (is_numeric($item)) {
-                                                    // It's an ID
-                                                    $related_objects_meta[] = [
-                                                        'id' => (int)$item,
-                                                        'module' => $module_key,
-                                                        'type' => $module_type
-                                                    ];
-                                                } else {
-                                                    // It's a slug
-                                                    $related_objects_meta[] = [
-                                                        'type' => $module_type,
-                                                        'module' => $module_key,
-                                                        'slug' => $item,
-                                                    ];
-                                                }
-                                            }
-                                        } else if (is_string($value) && strpos($value, ',') !== false) {
-                                            // Handle comma-separated string
-                                            $items = array_map('trim', explode(',', $value));
-                                            foreach ($items as $item) {
-                                                if (is_numeric($item)) {
-                                                    // It's an ID
-                                                    $related_objects_meta[] = [
-                                                        'id' => (int)$item,
-                                                        'module' => $module_key,
-                                                        'type' => $module_type
-                                                    ];
-                                                } else {
-                                                    // It's a slug
-                                                    $related_objects_meta[] = [
-                                                        'type' => $module_type,
-                                                        'module' => $module_key,
-                                                        'slug' => $item,
-                                                    ];
-                                                }
-                                            }
-                                        } else {
-                                            // Handle single value (could be ID or slug)
-                                            if (is_numeric($value)) {
+                                    // Process different input formats
+                                    if (is_array($value)) {
+                                        // Handle array of values (could be IDs or slugs)
+                                        foreach ($value as $item) {
+                                            if (is_numeric($item)) {
                                                 // It's an ID
                                                 $related_objects_meta[] = [
-                                                    'id' => (int)$value,
+                                                    'id' => (int)$item,
                                                     'module' => $module_key,
                                                     'type' => $module_type
                                                 ];
@@ -671,122 +639,160 @@ class API {
                                                 $related_objects_meta[] = [
                                                     'type' => $module_type,
                                                     'module' => $module_key,
-                                                    'slug' => $value,
+                                                    'slug' => $item,
                                                 ];
                                             }
+                                        }
+                                    } else if (is_string($value) && strpos($value, ',') !== false) {
+                                        // Handle comma-separated string
+                                        $items = array_map('trim', explode(',', $value));
+                                        foreach ($items as $item) {
+                                            if (is_numeric($item)) {
+                                                // It's an ID
+                                                $related_objects_meta[] = [
+                                                    'id' => (int)$item,
+                                                    'module' => $module_key,
+                                                    'type' => $module_type
+                                                ];
+                                            } else {
+                                                // It's a slug
+                                                $related_objects_meta[] = [
+                                                    'type' => $module_type,
+                                                    'module' => $module_key,
+                                                    'slug' => $item,
+                                                ];
+                                            }
+                                        }
+                                    } else {
+                                        // Handle single value (could be ID or slug)
+                                        if (is_numeric($value)) {
+                                            // It's an ID
+                                            $related_objects_meta[] = [
+                                                'id' => (int)$value,
+                                                'module' => $module_key,
+                                                'type' => $module_type
+                                            ];
+                                        } else {
+                                            // It's a slug
+                                            $related_objects_meta[] = [
+                                                'type' => $module_type,
+                                                'module' => $module_key,
+                                                'slug' => $value,
+                                            ];
                                         }
                                     }
                                 }
                             }
+                        }
 
+                        $i++;
+                    }
+
+                    if ($linked_modules != [] && !empty($related_objects_meta)) {
+                        // Fetch all related objects at once
+                        $related_objects_core = $this->core->getObjects($related_objects_meta);
+
+                        // Build lookup tables for both slug-based and ID-based lookups
+                        $rojt = [];
+                        $id_rojt = [];
+
+                        foreach ($related_objects_core as $related_object) {
+                            // For slug-based lookups
+                            if (isset($related_object['slug'])) {
+                                $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
+                            }
+
+                            // For ID-based lookups - store the object directly by ID
+                            $id_rojt[$related_object['id']] = $related_object;
+                        }
+
+                        $i = 0;
+                        // Process each object with the fetched related objects
+                        foreach ($objects as $object) {
+                            // Pass both lookup tables to processLinkedModules
+                            $documents[$i] = $this->processLinkedModules(
+                                $documents[$i],
+                                $object,
+                                $linked_modules,
+                                $related_objects_core,
+                                $rojt,
+                                $id_rojt
+                            );
                             $i++;
                         }
-
-                        if ($linked_modules != [] && !empty($related_objects_meta)) {
-                            // Fetch all related objects at once
-                            $related_objects_core = $this->core->getObjects($related_objects_meta);
-
-                            // Build lookup tables for both slug-based and ID-based lookups
-                            $rojt = [];
-                            $id_rojt = [];
-
-                            foreach ($related_objects_core as $related_object) {
-                                // For slug-based lookups
-                                if (isset($related_object['slug'])) {
-                                    $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
-                                }
-
-                                // For ID-based lookups - store the object directly by ID
-                                $id_rojt[$related_object['id']] = $related_object;
-                            }
-
-                            $i = 0;
-                            // Process each object with the fetched related objects
-                            foreach ($objects as $object) {
-                                // Pass both lookup tables to processLinkedModules
-                                $documents[$i] = $this->processLinkedModules(
-                                    $documents[$i],
-                                    $object,
-                                    $linked_modules,
-                                    $related_objects_core,
-                                    $rojt,
-                                    $id_rojt
-                                );
-                                $i++;
-                            }
-                        }
-
-                        $document = CollectionDocument::fromResources(...$documents);
-
-                        $totalObjectsCount= $this->core->getIDsTotalCount(
-                            $search_array = array_merge(
-                                ($_GET['filter'] ?? []),
-                                ($_GET['modules'] ?? []),
-                                array('type'=>$this->type)
-                            ),
-                            $limit,
-                            $sort_field,
-                            $sort_order,
-                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
-                            $ignore_ids = ($_GET['ignore_ids'] ?? []),
-                            $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
-                            false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
-                        );
-
-                        $document->addMeta('total_objects', $totalObjectsCount);
-                        //$document['meta'] = array('total_objects', $totalObjectsCount);
-
-                        $document->sendResponse();
                     }
 
-                    else {
-                        $documents = array();
-                        $document = CollectionDocument::fromResources(...$documents);
-                        $document->sendResponse();
-                    }
-                }
+                    $document = CollectionDocument::fromResources(...$documents);
 
-                else if (($this->type ?? false) && ($this->id ?? false)) {
+                    $totalObjectsCount= $this->core->getIDsTotalCount(
+                        $search_array = array_merge(
+                            ($_GET['filter'] ?? []),
+                            ($_GET['modules'] ?? []),
+                            array('type'=>$this->type)
+                        ),
+                        $limit,
+                        $sort_field,
+                        $sort_order,
+                        $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
+                        $ignore_ids = ($_GET['ignore_ids'] ?? []),
+                        $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
+                        false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
+                    );
 
-                    if ($object = $this->core->getObject($this->id)) {
-                        $document = new ResourceDocument($this->type, $object['id']);
-                        $document->add('modules', $object);
-                        $document->add('slug', $object['slug']);
+                    $document->addMeta('total_objects', $totalObjectsCount);
+                    //$document['meta'] = array('total_objects', $totalObjectsCount);
 
-                        if ($linked_modules != []) {
-                            $document = $this->processLinkedModules($document, $object, $linked_modules);
-                        }
-
-                        if ($this->thisRequestHasApiAccess) {
-                            $document->sendResponse();
-                        } else if ($object['content_privacy'] == 'public') {
-                            $document->sendResponse();
-                        } else {
-                            $error = [
-                                'errors' => [[
-                                    'status' => '403',
-                                    'title' => 'Forbidden',
-                                    'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
-                                ]]
-                            ];
-                            $this->json($error)->send(403);
-                            die();
-                        }
-                    } else {
-                        $this->send(404);
-                        die();
-                    }
+                    $document->sendResponse();
                 }
 
                 else {
+                    $documents = array();
+                    $document = CollectionDocument::fromResources(...$documents);
+                    $document->sendResponse();
+                }
+            }
+
+            else if (($this->type ?? false) && ($this->id ?? false)) {
+
+                if ($object = $this->core->getObject($this->id)) {
+                    $document = new ResourceDocument($this->type, $object['id']);
+                    $document->add('modules', $object);
+                    $document->add('slug', $object['slug']);
+
+                    if ($linked_modules != []) {
+                        $document = $this->processLinkedModules($document, $object, $linked_modules);
+                    }
+
+                    if ($this->thisRequestHasApiAccess) {
+                        $document->sendResponse();
+                    } else if ($object['content_privacy'] == 'public') {
+                        $document->sendResponse();
+                    } else {
+                        $error = [
+                            'errors' => [[
+                                'status' => '403',
+                                'title' => 'Forbidden',
+                                'detail' => 'You do not have permission to access this resource. If your request is using an API key in production mode, make sure it is from a whitelisted domain. Use Junction to generate API keys and whitelist your domains.'
+                            ]]
+                        ];
+                        $this->json($error)->send(403);
+                        die();
+                    }
+                } else {
                     $this->send(404);
                     die();
                 }
             }
+
+            else {
+                $this->send(404);
+                die();
+            }
         }
     }
 
-    public function pushTypesObject($object) {
+    public function pushTypesObject($object)
+    {
         $folder_path = TRIBE_ROOT . '/uploads/types';
         if (!is_dir($folder_path)) {
             mkdir($folder_path);
