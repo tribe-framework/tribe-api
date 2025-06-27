@@ -1,13 +1,12 @@
 <?php
 namespace Tribe;
 
-use JetBrains\PhpStorm\NoReturn;
-use alsvanzelf\jsonapi\CollectionDocument;
-use alsvanzelf\jsonapi\ResourceDocument;
-use alsvanzelf\jsonapi\MetaDocument;
+use \JetBrains\PhpStorm\NoReturn;
+use \alsvanzelf\jsonapi\CollectionDocument;
+use \alsvanzelf\jsonapi\ResourceDocument;
+use \alsvanzelf\jsonapi\MetaDocument;
 
 class API {
-
     private $response;
     private $request;
     public $requestBody;
@@ -15,6 +14,17 @@ class API {
     private $allowed_full_access_api_keys = [];
     private $api_objects = [];
     private $thisRequestHasApiAccess = false;
+    private $url_parts;
+    private $type;
+    private $id;
+    private $ids;
+    private $idr;
+
+    // private properties for Tribe objects
+    private $config;
+    private $core;
+    private $auth;
+    private $sql;
 
     public function __construct()
     {
@@ -36,7 +46,7 @@ class API {
 
         // Load API keys
         $this->loadApiKeys();
-        
+
         // Handle CORS for API requests
         $this->handleCors();
     }
@@ -48,26 +58,26 @@ class API {
     private function handleCors() {
         // Get the request origin
         $origin = $_SERVER['HTTP_ORIGIN'] ?? $_SERVER['HTTP_HOST'] ?? '*';
-        
+
         // Get the request method
         $request_method = $_SERVER['REQUEST_METHOD'];
-        
+
         // Set CORS headers for all responses
         header("Access-Control-Allow-Origin: $origin");
         header("Access-Control-Allow-Credentials: true");
         header("Access-Control-Max-Age: 86400"); // Cache preflight for 24 hours
-        
+
         // Set allowed headers - include X-API-KEY explicitly
         header("Access-Control-Allow-Headers: Content-Type, Authorization, X-API-KEY, X-Requested-With, Accept, Origin");
         header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS");
-        
+
         // Handle preflight OPTIONS request
         if ($request_method === 'OPTIONS') {
             // Just exit with 200 OK for preflight requests
             http_response_code(200);
             exit(0);
         }
-        
+
         // Continue with the regular request processing
         return;
     }
@@ -78,18 +88,30 @@ class API {
     private function loadApiKeys() {
         $this->allowed_read_access_api_keys = $this->allowed_full_access_api_keys = [];
         $this->api_objects = []; // Store all API objects for domain validation
-        
-        if ($api_ids = $this->core->getIDs(array('type'=>'apikey_record'), "0, 25", 'id', 'DESC', false)) {
-            $api_objects = $this->core->getObjects($api_ids);
+        $api_ids = $this->core->getIDs(array('type'=>'apikey_record'), "0, 25", 'id', 'DESC', false);
 
-            foreach ($api_objects as $api_object) {
-                // Store the full API object for later use
-                $this->api_objects[$api_object['apikey']] = $api_object;
-                
-                if (($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private') && (($api_object['readonly'] ?? false) === false || $api_object['readonly'] == false))
+        if (!$api_ids) {
+            return;
+        }
+
+        $api_objects = $this->core->getObjects($api_ids);
+
+        foreach ($api_objects as $api_object) {
+            // Store the full API object for later use
+            $this->api_objects[$api_object['apikey']] = $api_object;
+
+            // we are accepting only public or private privacy
+            $is_privacy_valid = in_array($api_object['content_privacy'], ['public', 'private'], true);
+
+            if ($is_privacy_valid) {
+                // check if key is allowed full access to the api
+                if (empty($api_object['readonly'])) {
                     $this->allowed_full_access_api_keys[] = $api_object['apikey'];
-                else if ($api_object['content_privacy'] == 'public' || $api_object['content_privacy'] == 'private')
+                }
+                // else mark the key as readonly access
+                else {
                     $this->allowed_read_access_api_keys[] = $api_object['apikey'];
+                }
             }
         }
     }
@@ -98,23 +120,25 @@ class API {
      * Validates API key authentication and handles exceptions
      * @return bool Whether the request is authorized
      */
-    private function validateApiKey() {
+    private function validateApiKey()
+    {
         // Extract the token if it's in Bearer format
         $request_api_key = null;
         $auth_header = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
         if ($auth_header && strpos($auth_header, 'Bearer ') === 0) {
-            $request_api_key = substr($auth_header, 7);
+            $request_api_key = str_replace('Bearer', '', $auth_header);
+            $request_api_key = trim($request_api_key);
         }
-        
+
         // Get the request domain
         $request_domain = parse_url((isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : ''), PHP_URL_HOST);
         if (empty($request_domain)) {
             $request_domain = $_SERVER['HTTP_HOST'] ?? '';
         }
-        
+
         // Get the instance slug from the environment
         $instance_slug = (explode('.', $request_domain)[0]) ?? '';
-        
+
         // Check if the request is coming from a Junction domain
         $is_junction_domain = false;
         if (!empty($request_domain)) {
@@ -123,7 +147,7 @@ class API {
                 "$instance_slug.tribe.junction.express",
                 "tribe.junction.express"
             ];
-            
+
             foreach ($junction_domains as $domain) {
                 if (strpos($request_domain, $domain) !== false) {
                     $is_junction_domain = true;
@@ -131,19 +155,19 @@ class API {
                 }
             }
         }
-        
+
         // Check if the request is from localhost
-        $is_localhost = in_array($request_domain, ['localhost', '127.0.0.1']) || 
-                        strpos($request_domain, 'localhost:') === 0 || 
+        $is_localhost = in_array($request_domain, ['localhost', '127.0.0.1']) ||
+                        strpos($request_domain, 'localhost:') === 0 ||
                         strpos($request_domain, '127.0.0.1:') === 0;
-        
+
         // Get the request method
         $request_method = strtoupper($_SERVER['REQUEST_METHOD']);
-        
+
         // Get the type configuration to check if API access is locked
         $typesJSON = $this->config->getTypes();
-        $block_read_access_without_apikey = isset($typesJSON['block_read_access_without_apikey']) && $typesJSON['block_read_access_without_apikey'] === true;
-        
+        $block_read_access_without_apikey = isset($typesJSON['block_read_access_without_apikey']) && $typesJSON['block_read_access_without_apikey'];
+
         // Allow all operations for Junction domains
         if ($is_junction_domain) {
             return true;
@@ -152,16 +176,16 @@ class API {
         // Check if API key is valid and has special permissions
         if ($request_api_key && isset($this->api_objects[$request_api_key])) {
             $api_object = $this->api_objects[$request_api_key];
-            
+
             // Check for dev mode with localhost
             if (isset($api_object['devmode']) && $api_object['devmode'] === true && $is_localhost) {
                 return true; // Allow all operations in dev mode from localhost
             }
-            
+
             // Check for whitelisted domains
             if (!empty($api_object['whitelisted_domains'])) {
                 $whitelisted_domains = array_map('trim', explode("\n", $api_object['whitelisted_domains']));
-                
+
                 foreach ($whitelisted_domains as $domain_pattern) {
                     // Convert wildcard pattern to regex
                     if (strpos($domain_pattern, '*') !== false) {
@@ -176,7 +200,7 @@ class API {
                                 return in_array($request_api_key, $this->allowed_full_access_api_keys);
                             }
                         }
-                    } 
+                    }
                     // Exact domain match
                     else if (strtolower($domain_pattern) === strtolower($request_domain)) {
                         // For read operations, any valid API key is sufficient
@@ -191,7 +215,7 @@ class API {
                 }
             }
         }
-       
+
         $is_allowed = in_array($request_api_key, $this->allowed_read_access_api_keys);
 
         if (!$is_allowed) {
@@ -204,7 +228,7 @@ class API {
         // For read operations (GET)
         if (!isset($request_method) || $request_method == 'GET' || $request_method == '') {
             // If API access is locked, require a valid API key
-            //Webapp data cannot be accessed publicly
+            // Webapp data cannot be accessed publicly
             if ($block_read_access_without_apikey || $this->type == 'webapp' || $this->type == 'apikey_record') {
                 return $is_allowed;
             } else {
@@ -216,14 +240,14 @@ class API {
             // Require a valid API key with full access
             return in_array($request_api_key, $this->allowed_full_access_api_keys);
         }
-        
+
         // Default deny for unrecognized methods
         return false;
     }
 
     /**
      * Process linked modules for an object and add relationships to the document
-     * 
+     *
      * @param ResourceDocument $document The document to add relationships to
      * @param array $object The object containing module data
      * @param array $linked_modules The linked modules configuration
@@ -233,26 +257,26 @@ class API {
      * @return ResourceDocument The document with added relationships
      */
     private function processLinkedModules(
-        ResourceDocument $document, 
-        array $object, 
-        array $linked_modules, 
-        array $related_objects_core = null, 
-        array $rojt = null,
-        array $id_rojt = null
+        ResourceDocument $document,
+        array $object,
+        array $linked_modules,
+        ?array $related_objects_core = null,
+        ?array $rojt = null,
+        ?array $id_rojt = null
     ) {
         foreach ($linked_modules as $module_key => $module_type) {
             if (array_key_exists($module_key, $object)) {
                 $value = $object[$module_key];
-                
+
                 // Skip if the value is empty
                 if (empty($value)) {
                     continue;
                 }
-                
+
                 // If we don't have pre-fetched related objects, fetch them now
                 if ($related_objects_core === null) {
                     $related_objects = [];
-                    
+
                     // Determine the query format based on the value type
                     if (is_array($value)) {
                         // Check if it's an array of numeric IDs
@@ -296,44 +320,44 @@ class API {
                             $related_objects = [$obj];
                         }
                     }
-                    
+
                     // Add relationships if related objects were found
                     if (!empty($related_objects)) {
                         // Create an array of relationship objects
                         $relationships = [];
                         $processed_ids = []; // Track already processed IDs
-                        
+
                         foreach($related_objects as $related_object) {
                             if (empty($related_object) || !isset($related_object['id'])) {
                                 continue;
                             }
-                            
+
                             $related_id = $related_object['id'];
-                            
+
                             // Skip if this is the same as the current object or already processed
                             if ($related_id == $object['id'] || isset($processed_ids[$related_id])) {
                                 continue;
                             }
-                            
+
                             // Mark as processed
                             $processed_ids[$related_id] = true;
-                            
+
                             $ojt = new ResourceDocument($module_type, $related_id);
                             $ojt->add('modules', $related_object);
                             $ojt->add('slug', $related_object['slug'] ?? '');
                             $relationships[] = $ojt;
                         }
-                        
+
                         // Add all relationships at once as a collection
                         if (!empty($relationships)) {
                             $document->addRelationship($module_key, $relationships);
                         }
                     }
-                } 
+                }
                 // Use pre-fetched related objects (for collection documents)
                 else {
                     $items_to_process = [];
-                    
+
                     // Convert the value to an array of items to process
                     if (is_array($value)) {
                         $items_to_process = $value;
@@ -343,58 +367,58 @@ class API {
                     } else {
                         $items_to_process = [$value];
                     }
-                    
+
                     // Create an array of relationship objects
                     $relationships = [];
                     $processed_ids = []; // Track already processed IDs
-                    
+
                     foreach ($items_to_process as $item) {
                         if (empty($item)) {
                             continue;
                         }
-                        
+
                         // For numeric IDs, look up directly in id_rojt
                         if (is_numeric($item)) {
                             $related_id = (int)$item;
-                            
+
                             // Skip if already processed, same as current object, or not found
-                            if (isset($processed_ids[$related_id]) || 
-                                $related_id == $object['id'] || 
+                            if (isset($processed_ids[$related_id]) ||
+                                $related_id == $object['id'] ||
                                 !isset($id_rojt[$related_id])) {
                                 continue;
                             }
-                            
+
                             // Mark as processed
                             $processed_ids[$related_id] = true;
-                            
+
                             $related_object = $id_rojt[$related_id];
                             $ojt = new ResourceDocument($module_type, $related_id);
                             $ojt->add('modules', $related_object);
                             $ojt->add('slug', $related_object['slug'] ?? '');
                             $relationships[] = $ojt;
-                        } 
+                        }
                         // For slugs, use the slug-based lookup table
                         else if (isset($rojt[$module_type][$item])) {
                             $related_id = $rojt[$module_type][$item];
-                            
+
                             // Skip if already processed, invalid ID, or not found
-                            if (isset($processed_ids[$related_id]) || 
-                                !$related_id || 
-                                $related_id == $object['id'] || 
+                            if (isset($processed_ids[$related_id]) ||
+                                !$related_id ||
+                                $related_id == $object['id'] ||
                                 !isset($related_objects_core[$related_id])) {
                                 continue;
                             }
-                            
+
                             // Mark as processed
                             $processed_ids[$related_id] = true;
-                            
+
                             $ojt = new ResourceDocument($module_type, $related_id);
                             $ojt->add('modules', $related_objects_core[$related_id]);
                             $ojt->add('slug', $item);
                             $relationships[] = $ojt;
                         }
                     }
-                    
+
                     // Add all relationships at once as a collection
                     if (!empty($relationships)) {
                         $document->addRelationship($module_key, $relationships);
@@ -402,7 +426,7 @@ class API {
                 }
             }
         }
-        
+
         return $document;
     }
 
@@ -417,11 +441,10 @@ class API {
                 ]]
             ];
             $this->json($error)->send(403);
-            return;
         }
 
         if ($version == '1.1') {
-            
+
             $linked_modules = $this->config->getTypeLinkedModules($this->type);
 
             if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
@@ -453,7 +476,7 @@ class API {
 
                     $object = array_merge($this->core->getObject($object['data']['id']), $object['data'], $object['data']['attributes']['modules']);
                     unset($object['attributes']);
-                    
+
                     $object = $this->core->getObject($this->core->pushObject($object));
 
                     $document = new ResourceDocument($this->type, $object['id']);
@@ -477,7 +500,7 @@ class API {
                     $this->getTypesObject();
 
                 } else {
-                    
+
                     $object = array_merge($object['data'], $object['data']['attributes']['modules']);
                     unset($object['attributes']);
 
@@ -548,26 +571,26 @@ class API {
                         $sort_field = 'id';
                         $sort_order = 'DESC';
                     }
-                    
+
                     //getting IDs
                     if ($this->ids = $this->core->getIDs(
                             $search_array = array_merge(
-                                ($_GET['filter'] ?? []), 
-                                ($_GET['modules'] ?? []), 
+                                ($_GET['filter'] ?? []),
+                                ($_GET['modules'] ?? []),
                                 array('type'=>$this->type)
-                            ), 
+                            ),
                             $limit,
-                            $sort_field, 
+                            $sort_field,
                             $sort_order,
-                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
-                            $ignore_ids = ($_GET['ignore_ids'] ?? []), 
+                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
+                            $ignore_ids = ($_GET['ignore_ids'] ?? []),
                             $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
                             false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
                         ))
                     {
                         $objectr = $this->core->getObjects($this->ids);
                         $objects = [];
-                        
+
                         //to sort accurately
                         foreach ($this->ids as $this->idr) {
                             $objects[] = $objectr[$this->idr['id']];
@@ -586,12 +609,12 @@ class API {
                                 foreach ($linked_modules as $module_key => $module_type) {
                                     if (array_key_exists($module_key, $object)) {
                                         $value = $object[$module_key];
-                                        
+
                                         // Skip if the value is empty
                                         if (empty($value)) {
                                             continue;
                                         }
-                                        
+
                                         // Process different input formats
                                         if (is_array($value)) {
                                             // Handle array of values (could be IDs or slugs)
@@ -660,30 +683,30 @@ class API {
                         if ($linked_modules != [] && !empty($related_objects_meta)) {
                             // Fetch all related objects at once
                             $related_objects_core = $this->core->getObjects($related_objects_meta);
-                            
+
                             // Build lookup tables for both slug-based and ID-based lookups
                             $rojt = [];
                             $id_rojt = [];
-                            
+
                             foreach ($related_objects_core as $related_object) {
                                 // For slug-based lookups
                                 if (isset($related_object['slug'])) {
                                     $rojt[$related_object['type']][$related_object['slug']] = $related_object['id'];
                                 }
-                                
+
                                 // For ID-based lookups - store the object directly by ID
                                 $id_rojt[$related_object['id']] = $related_object;
                             }
-                            
+
                             $i = 0;
                             // Process each object with the fetched related objects
                             foreach ($objects as $object) {
                                 // Pass both lookup tables to processLinkedModules
                                 $documents[$i] = $this->processLinkedModules(
-                                    $documents[$i], 
-                                    $object, 
-                                    $linked_modules, 
-                                    $related_objects_core, 
+                                    $documents[$i],
+                                    $object,
+                                    $linked_modules,
+                                    $related_objects_core,
                                     $rojt,
                                     $id_rojt
                                 );
@@ -695,15 +718,15 @@ class API {
 
                         $totalObjectsCount= $this->core->getIDsTotalCount(
                             $search_array = array_merge(
-                                ($_GET['filter'] ?? []), 
-                                ($_GET['modules'] ?? []), 
+                                ($_GET['filter'] ?? []),
+                                ($_GET['modules'] ?? []),
                                 array('type'=>$this->type)
-                            ), 
+                            ),
                             $limit,
-                            $sort_field, 
+                            $sort_field,
                             $sort_order,
-                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)), 
-                            $ignore_ids = ($_GET['ignore_ids'] ?? []), 
+                            $show_public_objects_only = (($_GET['show_public_objects_only'] === 'false' || $_GET['show_public_objects_only'] === false) ? boolval(false) : boolval(true)),
+                            $ignore_ids = ($_GET['ignore_ids'] ?? []),
                             $show_partial_search_results = (($_GET['filter'] ?? false) ? boolval(true) : boolval(false)),
                             false, 'LIKE', 'OR', 'AND', ($_GET['range'] ?? [])
                         );
@@ -712,7 +735,7 @@ class API {
                         //$document['meta'] = array('total_objects', $totalObjectsCount);
 
                         $document->sendResponse();
-                    } 
+                    }
 
                     else {
                         $documents = array();
@@ -816,12 +839,12 @@ class API {
     {
         // Set content type header
         header('Content-Type: application/vnd.api+json');
-        
+
         // Set CORS headers again to ensure they're included in all responses
         $origin = $_SERVER['HTTP_ORIGIN'] ?? $_SERVER['HTTP_HOST'] ?? '*';
         header("Access-Control-Allow-Origin: $origin");
         header("Access-Control-Allow-Credentials: true");
-        
+
         // Set the HTTP status code
         http_response_code($status_code);
 
@@ -835,7 +858,7 @@ class API {
      * @param ?string $reqMethod
      * @return bool|string
      */
-    public function method(string $reqMethod = null)
+    public function method(?string $reqMethod = null)
     {
         if (!$reqMethod) {
             return strtolower($_SERVER['REQUEST_METHOD']);
