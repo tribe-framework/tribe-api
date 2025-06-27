@@ -794,6 +794,18 @@ class API {
         unset($object['attributes']);
     }
 
+    private function parseSizeToGB(string $sizeRaw): string {
+        $parts = preg_split('/\s+/', $sizeRaw, -1, PREG_SPLIT_NO_EMPTY)[0];
+        $numeric = isset($parts[0]) ? trim($parts[0]) : '';
+
+        if (!is_numeric($numeric)) {
+            error_log("Warning: Non-numeric size encountered: '{$sizeRaw}'");
+            return '0.00';
+        }
+
+        return number_format((float)$numeric / 1024 / 1024, 2, '.', '');
+    }
+
     public function getTypesObject() {
         $object = $this->config->getTypes();
 
@@ -803,7 +815,7 @@ class API {
 
         $sizeRaw = $this->core->executeShellCommand('du -s '.TRIBE_ROOT . '/uploads');
         $objectsCount = $this->sql->executeSQL("SELECT COUNT(*) AS `count` FROM `data`");
-        $object['webapp']['size_in_gb'] = number_format((float)(explode(' ', $sizeRaw)[0]/1024/1024), 2, '.', '');
+        $object['webapp']['size_in_gb'] = $this->parseSizeToGB($sizeRaw);
         $object['webapp']['total_objects'] = $objectsCount[0]['count'];
 
         $document = new ResourceDocument($this->type, 0);
